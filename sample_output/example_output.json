@@ -1,0 +1,154 @@
+{
+  "technical_specifications": [
+    {
+      "item_name": "Steel Reinforcement Bars",
+      "specification_text": "Grade 60 steel reinforcement bars conforming to ASTM A615",
+      "unit": "kg",
+      "numeric_value": "500",
+      "tolerance": "± 5%",
+      "standard_reference": "ASTM A615",
+      "material": "Steel Grade 60",
+      "source": {
+        "chunk_id": "table_001_row_1_a3f2c1d8",
+        "page": 15,
+        "exact_text": "Steel reinforcement bars shall be Grade 60 conforming to ASTM A615"
+      },
+      "confidence": "HIGH"
+    },
+    {
+      "item_name": "Portland Cement",
+      "specification_text": "Ordinary Portland Cement Grade 53 conforming to IS 12269",
+      "unit": "MT",
+      "numeric_value": "120",
+      "tolerance": "NOT_FOUND",
+      "standard_reference": "IS 12269",
+      "material": "OPC Grade 53",
+      "source": {
+        "chunk_id": "table_001_row_2_b7e4d9f1",
+        "page": 15,
+        "exact_text": "OPC Grade 53 as per IS 12269"
+      },
+      "confidence": "HIGH"
+    },
+    {
+      "item_name": "Concrete Mix Design",
+      "specification_text": "M40 grade concrete with minimum cement content of 360 kg/m³",
+      "unit": "m³",
+      "numeric_value": "2500",
+      "tolerance": "± 2%",
+      "standard_reference": "IS 456:2000",
+      "material": "M40 Grade Concrete",
+      "source": {
+        "chunk_id": "chunk_16_c2d1e8f3",
+        "page": 16,
+        "exact_text": "Concrete shall be of M40 grade with minimum cement content of 360 kg/m3 as per IS 456:2000"
+      },
+      "confidence": "HIGH"
+    },
+    {
+      "item_name": "Waterproofing Membrane",
+      "specification_text": "APP modified bituminous waterproofing membrane, 4mm thick",
+      "unit": "sqm",
+      "numeric_value": "850",
+      "tolerance": "NOT_FOUND",
+      "standard_reference": "IS 13982",
+      "material": "APP Modified Bitumen",
+      "source": {
+        "chunk_id": "table_003_row_1_d8f5a2b7",
+        "page": 22,
+        "exact_text": "APP modified bituminous membrane 4mm thick as per IS 13982"
+      },
+      "confidence": "MEDIUM"
+    },
+    {
+      "item_name": "Structural Steel Sections",
+      "specification_text": "Hot rolled structural steel sections conforming to IS 2062 Grade E250",
+      "unit": "MT",
+      "numeric_value": "75",
+      "tolerance": "± 3%",
+      "standard_reference": "IS 2062",
+      "material": "Steel Grade E250",
+      "source": {
+        "chunk_id": "chunk_18_e1a3b5c9",
+        "page": 18,
+        "exact_text": "Structural steel sections shall conform to IS 2062 Grade E250"
+      },
+      "confidence": "HIGH"
+    }
+  ],
+  "scope_of_work": {
+    "tasks": [
+      {
+        "task_description": "Site preparation including clearing, grubbing, and leveling of the project site",
+        "deliverables": [
+          "Cleared and leveled site",
+          "Site preparation completion report",
+          "Photographic documentation"
+        ],
+        "timeline": "2 weeks",
+        "dependencies": [
+          "Site access approval from client",
+          "Environmental clearance"
+        ],
+        "source": {
+          "chunk_id": "chunk_8_f2b4c6d0",
+          "page": 8,
+          "exact_text": "The contractor shall carry out site preparation including clearing, grubbing, and leveling within 2 weeks of site handover"
+        }
+      },
+      {
+        "task_description": "Foundation work including excavation, PCC, and RCC footing construction",
+        "deliverables": [
+          "Completed foundation as per structural drawings",
+          "Soil investigation report",
+          "Foundation completion certificate"
+        ],
+        "timeline": "6 weeks",
+        "dependencies": [
+          "Site preparation completion",
+          "Approved structural drawings"
+        ],
+        "source": {
+          "chunk_id": "chunk_9_a1c3e5f7",
+          "page": 9,
+          "exact_text": "Foundation work shall include excavation, PCC bed, and RCC footings as per approved structural drawings"
+        }
+      },
+      {
+        "task_description": "Superstructure construction including columns, beams, and slab casting",
+        "deliverables": [
+          "Completed RCC frame structure",
+          "Concrete cube test reports",
+          "Stage-wise inspection reports"
+        ],
+        "timeline": "16 weeks",
+        "dependencies": [
+          "Foundation completion",
+          "Material procurement",
+          "Formwork availability"
+        ],
+        "source": {
+          "chunk_id": "chunk_10_b2d4f6a8",
+          "page": 10,
+          "exact_text": "Superstructure shall be constructed as per approved structural drawings using M40 grade concrete"
+        }
+      }
+    ],
+    "exclusions": [
+      {
+        "item": "Environmental Impact Assessment (EIA) study",
+        "source": {
+          "chunk_id": "chunk_12_c3e5a7b9",
+          "page": 12
+        }
+      },
+      {
+        "item": "Furniture and interior decoration",
+        "source": {
+          "chunk_id": "chunk_12_d4f6b8c0",
+          "page": 12
+        }
+      }
+    ]
+  }
+}
