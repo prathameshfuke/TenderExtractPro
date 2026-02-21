@@ -51,7 +51,7 @@ def verify_grounding(
     best_score = 0.0
     for item in source_chunks:
         chunk: Chunk = item["chunk"]
-        ratio = fuzz.partial_ratio(
+        ratio = fuzz.token_sort_ratio(
             exact_text.lower().strip(),
             chunk.text.lower().strip(),
         )
@@ -161,7 +161,7 @@ def _verify_task_grounding(
     best = 0.0
     for item in source_chunks:
         chunk: Chunk = item["chunk"]
-        ratio = fuzz.partial_ratio(
+        ratio = fuzz.token_sort_ratio(
             text_to_check.lower().strip(),
             chunk.text.lower().strip(),
         ) / 100.0
