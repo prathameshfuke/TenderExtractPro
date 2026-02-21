@@ -103,7 +103,7 @@ class LLMConfig:
     """
     model_path: str = os.getenv(
         "LLM_MODEL_PATH",
-        str(Path.home() / "models" / "mistral-7b-instruct-v0.2.Q4_K_M.gguf"),
+        "models/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
     )
     n_ctx: int = 8192
     max_tokens: int = 4096
