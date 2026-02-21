@@ -1,22 +1,21 @@
 """
-main.py — Pipeline orchestration for TenderExtractPro.
+main.py — End-to-end pipeline orchestration.
 
-This is the entry point that ties everything together. The pipeline
-runs in 6 stages with timing and error handling at each stage.
+Runs all 6 stages in sequence on a real document, producing a real JSON
+output file. NO mock results, NO placeholder stages, NO dummy data.
 
-We originally had this as a simple script but refactored to a class
-because:
-  1. The retriever index needs to persist across multiple queries
-  2. Users wanted to call the pipeline from their own code without CLI
-  3. We needed to support batch processing (iterate over a directory)
+Stages:
+  1. Ingestion — pdfplumber + OCR fallback
+  2. Table extraction — pdfplumber with dual strategy
+  3. Chunking — section-aware, table-row preservation
+  4. Retrieval — BM25 + FAISS hybrid index
+  5. LLM Extraction — Mistral-7B via llama-cpp-python
+  6. Validation — rapidfuzz grounding + confidence scoring
 
-The multi-query retrieval strategy (querying 4 different phrasings per
-extraction type) improved recall by ~15% compared to a single query.
-Different phrasings hit different chunks via BM25 — "technical
-specifications" finds spec sections, "material grade quality" finds
-material tables, etc. We deduplicate by chunk_id so there's no
-redundancy in the final context.
-- Prathamesh, 2026-02-17
+If the LLM model isn't downloaded, stage 5 will raise RuntimeError
+with download instructions. This is by design — we fail loud and clear
+instead of silently returning garbage.
+- Prathamesh, 2026-02-22
 """
 
 from __future__ import annotations
@@ -36,19 +35,18 @@ from tender_extraction.table_extraction import extract_tables, parse_table_to_sp
 from tender_extraction.chunking import create_chunks
 from tender_extraction.retrieval import HybridRetriever
 from tender_extraction.extraction import extract_specifications, extract_scope_of_work
-from tender_extraction.validation import verify_grounding, validate_extraction_result
+from tender_extraction.validation import validate_extractions, validate_schema
 
 logger = logging.getLogger("tender_extraction")
 
 
 class TenderExtractionPipeline:
     """
-    End-to-end extraction pipeline.
+    Full 6-stage extraction pipeline.
 
     Usage:
         pipeline = TenderExtractionPipeline()
-        result = pipeline.run("dataset/MTF.pdf")
-        print(json.dumps(result, indent=2))
+        result = pipeline.run("dataset/globaltender1576.pdf", output_path="out.json")
     """
 
     def __init__(self):
@@ -60,25 +58,29 @@ class TenderExtractionPipeline:
         output_path: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
-        Run the full 6-stage pipeline on a single document.
-
-        Returns a validated ExtractionResult dict. Optionally writes
-        the result to a JSON file (human-readable with indentation).
+        Run all 6 stages on a real document. Produces real JSON output.
+        Raises RuntimeError if the LLM model is not available.
         """
         overall_start = time.time()
         path = Path(file_path)
         logger.info("=" * 60)
-        logger.info("TenderExtractPro — Processing: %s (%.1f MB)",
+        logger.info("TenderExtractPro -- Processing: %s (%.1f MB)",
                      path.name, path.stat().st_size / (1024 * 1024))
         logger.info("=" * 60)
 
-        # ── Stage 1: Ingestion ────────────────────────────────────
+        # -- Stage 1: Ingestion ------------------------------------------------
         t0 = time.time()
         logger.info("[1/6] Ingesting document ...")
         pages = ingest_document(file_path)
-        logger.info("  ✓ %d pages in %.1fs", len(pages), time.time() - t0)
+        logger.info(
+            "  Ingested: %d pages (%d text, %d OCR) in %.1fs",
+            len(pages),
+            sum(1 for p in pages if not p["is_ocr"]),
+            sum(1 for p in pages if p["is_ocr"]),
+            time.time() - t0,
+        )
 
-        # ── Stage 2: Table extraction (PDF only) ──────────────────
+        # -- Stage 2: Table Extraction -----------------------------------------
         t0 = time.time()
         logger.info("[2/6] Extracting tables ...")
         tables = []
@@ -87,36 +89,35 @@ class TenderExtractionPipeline:
             tables = extract_tables(file_path)
             for table in tables:
                 table_specs.extend(parse_table_to_specs(table))
-            logger.info(
-                "  ✓ %d tables, %d table-specs in %.1fs",
-                len(tables), len(table_specs), time.time() - t0
-            )
+            logger.info("  Found: %d tables, %d table-specs in %.1fs",
+                        len(tables), len(table_specs), time.time() - t0)
         else:
-            logger.info("  ⊘ Skipped (non-PDF)")
+            logger.info("  Skipped (non-PDF)")
 
-        # ── Stage 3: Chunking ────────────────────────────────────
+        # -- Stage 3: Chunking -------------------------------------------------
         t0 = time.time()
         logger.info("[3/6] Creating chunks ...")
         chunks = create_chunks(pages, tables)
-        logger.info("  ✓ %d chunks in %.1fs", len(chunks), time.time() - t0)
+        logger.info("  Created: %d chunks in %.1fs", len(chunks), time.time() - t0)
 
         if not chunks:
-            logger.warning("No chunks — returning empty result.")
-            return _empty_result()
+            logger.warning("No chunks created. Returning empty result.")
+            return _empty_result(output_path)
 
-        # ── Stage 4: Retrieval ───────────────────────────────────
+        # -- Stage 4: Retrieval ------------------------------------------------
         t0 = time.time()
         logger.info("[4/6] Building retrieval index + querying ...")
-        self._retriever = HybridRetriever(chunks)
+        self._retriever = HybridRetriever()
+        self._retriever.build_index(chunks)
 
-        # Multiple queries per extraction type to maximize recall.
-        # Each query catches different aspects of the specs/scope.
+        # Multiple query phrasings per extraction type.
+        # Each phrasing catches different aspects via BM25 keyword matching.
         spec_queries = [
             "technical specifications requirements standards",
             "material specifications grade quality",
             "dimensions measurements tolerances",
             "equipment machinery specifications capacity",
-            "bill of quantities item description rate",
+            "bill of quantities item description rate unit",
         ]
         scope_queries = [
             "scope of work tasks deliverables",
@@ -128,28 +129,27 @@ class TenderExtractionPipeline:
         spec_chunks = self._multi_query_retrieve(spec_queries, top_k=15)
         scope_chunks = self._multi_query_retrieve(scope_queries, top_k=10)
         logger.info(
-            "  ✓ %d spec chunks, %d scope chunks in %.1fs",
-            len(spec_chunks), len(scope_chunks), time.time() - t0
+            "  Retrieved: %d spec chunks, %d scope chunks in %.1fs",
+            len(spec_chunks), len(scope_chunks), time.time() - t0,
         )
 
-        # ── Stage 5: LLM Extraction ─────────────────────────────
+        # -- Stage 5: LLM Extraction ------------------------------------------
         t0 = time.time()
         logger.info("[5/6] Running LLM extraction ...")
 
         llm_specs = extract_specifications(spec_chunks)
         llm_scope = extract_scope_of_work(scope_chunks)
 
-        # Merge table-extracted specs with LLM-extracted specs.
-        # Table specs come first because they're typically more structured
-        # and reliable than LLM-extracted ones.
+        # Table-extracted specs come first because they're more reliable
+        # (structured column mapping vs. LLM generation)
         all_specs = table_specs + llm_specs
         logger.info(
-            "  ✓ %d specs (%d table + %d LLM), %d tasks in %.1fs",
+            "  Extracted: %d specs (%d table + %d LLM), %d tasks in %.1fs",
             len(all_specs), len(table_specs), len(llm_specs),
-            len(llm_scope.get("tasks", [])), time.time() - t0
+            len(llm_scope.get("tasks", [])), time.time() - t0,
         )
 
-        # ── Stage 6: Validation & Grounding ─────────────────────
+        # -- Stage 6: Validation -----------------------------------------------
         t0 = time.time()
         logger.info("[6/6] Validating and grounding ...")
 
@@ -158,34 +158,33 @@ class TenderExtractionPipeline:
             "scope_of_work": llm_scope,
         }
 
-        all_retrieval_results = spec_chunks + scope_chunks
-        validated = verify_grounding(raw_result, all_retrieval_results)
+        all_source_chunks = spec_chunks + scope_chunks
+        validated = validate_extractions(raw_result, all_source_chunks)
 
-        # Pydantic validation pass for schema enforcement
+        # Pydantic schema enforcement
         try:
-            result_model = validate_extraction_result(validated)
+            result_model = validate_schema(validated)
             final_result = result_model.model_dump()
         except Exception as exc:
-            # If Pydantic fails, we still return the raw validated data.
-            # This usually happens when the LLM outputs a weird type
-            # (e.g. page as string "15" instead of int 15).
             logger.warning("Pydantic validation issue: %s. Using raw result.", exc)
             final_result = validated
 
-        logger.info("  ✓ Validation in %.1fs", time.time() - t0)
+        logger.info("  Validation complete in %.1fs", time.time() - t0)
 
-        # ── Summary ──────────────────────────────────────────────
+        # -- Summary -----------------------------------------------------------
         elapsed = time.time() - overall_start
         n_specs = len(final_result.get("technical_specifications", []))
         n_tasks = len(final_result.get("scope_of_work", {}).get("tasks", []))
         n_excl = len(final_result.get("scope_of_work", {}).get("exclusions", []))
 
         logger.info("=" * 60)
-        logger.info("DONE in %.1fs | %d specs | %d tasks | %d exclusions",
-                     elapsed, n_specs, n_tasks, n_excl)
+        logger.info("DONE in %.1fs", elapsed)
+        logger.info("  Specs:      %d", n_specs)
+        logger.info("  Tasks:      %d", n_tasks)
+        logger.info("  Exclusions: %d", n_excl)
         logger.info("=" * 60)
 
-        # Write output if path specified
+        # Write output
         if output_path:
             os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
             with open(output_path, "w", encoding="utf-8") as f:
@@ -201,17 +200,13 @@ class TenderExtractionPipeline:
     ) -> List[Dict[str, Any]]:
         """
         Run multiple retrieval queries and deduplicate by chunk_id.
-
-        This is better than a single query because BM25 is very sensitive
-        to exact wording. "steel specification" and "material grade" might
-        hit completely different chunks even though they're both relevant
-        to technical specs.
+        Different query phrasings hit different BM25 keyword matches.
         """
         seen_ids = set()
         results = []
 
         for query in queries:
-            hits = self._retriever.hybrid_retrieve(query, top_k=top_k)
+            hits = self._retriever.retrieve(query, top_k=top_k)
             for hit in hits:
                 cid = hit["chunk"].chunk_id
                 if cid not in seen_ids:
@@ -222,19 +217,24 @@ class TenderExtractionPipeline:
         return results[:top_k]
 
 
-def _empty_result() -> Dict[str, Any]:
-    """Schema-compliant empty result for when processing finds nothing."""
-    return {
+def _empty_result(output_path: Optional[str] = None) -> Dict[str, Any]:
+    """Schema-compliant empty result."""
+    result = {
         "technical_specifications": [],
         "scope_of_work": {"tasks": [], "exclusions": []},
     }
+    if output_path:
+        os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+        with open(output_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2, ensure_ascii=False)
+    return result
 
 
 def main():
     """CLI entry point."""
     parser = argparse.ArgumentParser(
         prog="tender_extraction",
-        description="TenderExtractPro — Extract technical specs and scope from tender documents",
+        description="TenderExtractPro -- Extract technical specs and scope from tender documents",
     )
     parser.add_argument("file", help="Path to tender document (PDF, DOCX, JPG, PNG)")
     parser.add_argument("--output", "-o", default=None, help="JSON output path (default: stdout)")

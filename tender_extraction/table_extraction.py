@@ -300,3 +300,39 @@ def _get_cell(
         return default
     value = row[col_idx].strip()
     return value if value else default
+
+
+# ── Smoke test ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+    pdf = "dataset/Tenderdocuments.pdf"
+    if not Path(pdf).exists():
+        pdf = "dataset/globaltender1576.pdf"
+    if not Path(pdf).exists():
+        print("No dataset PDFs found.")
+        sys.exit(1)
+
+    print(f"Extracting tables from {pdf} ...")
+    tables = extract_tables(pdf)
+    print(f"Found {len(tables)} tables.\n")
+
+    for t in tables[:10]:
+        print(f"  {t['table_id']} (page {t['page']}): "
+              f"{len(t['headers'])} cols x {len(t['rows'])} rows")
+        print(f"    headers: {t['headers'][:6]}")
+        if t["rows"]:
+            print(f"    row 1: {t['rows'][0][:6]}")
+
+        # Try parsing to specs
+        specs = parse_table_to_specs(t)
+        if specs:
+            print(f"    -> {len(specs)} specs parsed")
+            for s in specs[:3]:
+                print(f"       {s['item_name'][:40]}: {s['specification_text'][:40]}")
+        print()
+
+    print("Table extraction smoke test passed.")

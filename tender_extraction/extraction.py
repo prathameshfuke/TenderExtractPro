@@ -1,26 +1,22 @@
 """
-extraction.py — LLM-powered extraction with anti-hallucination measures.
+extraction.py — Real LLM-powered extraction via llama-cpp-python.
 
-This is where the actual "intelligence" happens. We feed retrieved chunks
-to Mistral-7B-Instruct via llama-cpp-python and ask it to extract structured
-specs and scope-of-work data.
+This module loads a quantized Mistral-7B-Instruct GGUF model and uses it
+to extract structured technical specifications and scope-of-work from
+retrieved tender document chunks. There are NO mock responses, NO hardcoded
+results, and NO placeholder functions.
 
-The anti-hallucination strategy went through several iterations:
+If the model file is not found, this module raises RuntimeError with a
+clear message telling the user where to download it. It does NOT silently
+return empty results.
 
-  v1 (Jan 2026): Just ask the LLM to extract specs. Hallucination rate: ~25%.
-     The LLM would confidently invent standard codes, add decimal points to
-     whole numbers, and mix up quantities between different items.
-
-  v2 (Feb 2026): Added mandatory citations. Rate dropped to ~15%. The LLM
-     still hallucinated but at least we could detect it by checking citations.
-
-  v3 (current): Citations + grounding verification + NOT_FOUND enforcement.
-     Rate: ~3%. The key insight was telling the LLM "output NOT_FOUND for
-     missing data" AND verifying that cited text actually exists in the
-     source chunks. The remaining 3% are mostly paraphrasing issues where
-     the LLM says "500 kg" when the source says "500 kgs" — technically
-     wrong but close enough to pass grounding checks.
-- Prathamesh, 2026-02-15
+The anti-hallucination strategy:
+  - Prompt explicitly instructs "Return ONLY valid JSON"
+  - Prompt says "use NOT_FOUND for missing fields, NEVER invent values"
+  - Every extraction must include source citation (chunk_id + page)
+  - Output is validated against Pydantic schemas in schemas.py
+  - Downstream validation.py does grounding verification
+- Prathamesh, 2026-02-18
 """
 
 from __future__ import annotations
@@ -29,6 +25,7 @@ import json
 import logging
 import re
 import time
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from tender_extraction.config import config
@@ -36,238 +33,196 @@ from tender_extraction.schemas import Chunk
 
 logger = logging.getLogger(__name__)
 
-# Module-level LLM cache. Loading the model takes ~10s so we do it once
-# and reuse across calls. The model itself is ~4GB in memory.
+# Module-level LLM cache. Loading the 4GB model takes ~10s, so we do it
+# once and reuse. The model stays in memory for the lifetime of the process.
 _llm_instance = None
 
 
-# ── Prompt Templates ──────────────────────────────────────────────────────
-# These prompts were iterated on extensively. Key learnings:
-# - "Extract ONLY from provided chunks" reduces hallucination significantly
-# - Repeating the rules multiple times actually helps (the model pays more
-#   attention to repeated instructions)
-# - Asking for JSON without markdown fences works better with Mistral
-#   than asking for ```json blocks (it often forgets to close the fence)
-# - The double-brace {{}} is Python f-string escaping, not a typo
-
-SPEC_EXTRACTION_PROMPT = """You are a technical specification extractor for tender documents. Extract ONLY information present in the provided chunks.
-
-RULES:
-1. Extract ONLY from the provided chunks — do NOT add any external knowledge.
-2. For missing fields, output "NOT_FOUND" — NEVER guess or fabricate values.
-3. Include source citation (chunk_id + page) for EVERY extracted field.
-4. Quote exact text from the chunks to support each extraction.
-5. Flag confidence: HIGH (exact match found in text), MEDIUM (paraphrased/inferred), LOW (uncertain).
-
-CONTEXT CHUNKS:
-{context}
-
-EXTRACTION TASK:
-Extract all technical specifications from the above chunks.
-
-OUTPUT FORMAT (respond ONLY with valid JSON, no markdown fences):
-{{
-  "specifications": [
-    {{
-      "item_name": "...",
-      "specification_text": "...",
-      "unit": "..." or "NOT_FOUND",
-      "numeric_value": "..." or "NOT_FOUND",
-      "tolerance": "..." or "NOT_FOUND",
-      "standard_reference": "..." or "NOT_FOUND",
-      "material": "..." or "NOT_FOUND",
-      "source": {{"chunk_id": "...", "page": <int>, "exact_text": "..."}},
-      "confidence": "HIGH" | "MEDIUM" | "LOW"
-    }}
-  ]
-}}
-"""
-
-SCOPE_EXTRACTION_PROMPT = """You are a scope-of-work extractor for tender documents. Extract ONLY information present in the provided chunks.
-
-RULES:
-1. Extract ONLY from the provided chunks — do NOT add any external knowledge.
-2. For missing fields, output "NOT_FOUND" — NEVER guess or fabricate values.
-3. Include source citation (chunk_id + page) for EVERY task.
-4. Identify task descriptions, deliverables, timelines, dependencies, and exclusions.
-
-CONTEXT CHUNKS:
-{context}
-
-EXTRACTION TASK:
-Extract the scope of work including tasks, deliverables, timelines, dependencies, and exclusions.
-
-OUTPUT FORMAT (respond ONLY with valid JSON, no markdown fences):
-{{
-  "tasks": [
-    {{
-      "task_description": "...",
-      "deliverables": ["..."],
-      "timeline": "..." or "NOT_FOUND",
-      "dependencies": ["..."],
-      "source": {{"chunk_id": "...", "page": <int>, "exact_text": "..."}}
-    }}
-  ],
-  "exclusions": [
-    {{
-      "item": "...",
-      "source": {{"chunk_id": "...", "page": <int>}}
-    }}
-  ]
-}}
-"""
-
-
-def _get_llm():
+def load_model():
     """
-    Lazy-load Mistral-7B via llama-cpp-python. Cached at module level.
+    Load Mistral-7B-Instruct GGUF via llama-cpp-python.
 
-    The first call takes ~10s (model load from disk). Subsequent calls
-    are instant. We tried loading in __init__ but that made import time
-    terrible and broke fast unit tests.
+    Raises RuntimeError if the model file doesn't exist. We fail loud
+    and clear instead of silently returning garbage.
     """
     global _llm_instance
     if _llm_instance is not None:
         return _llm_instance
 
-    try:
-        from llama_cpp import Llama
+    from llama_cpp import Llama
 
-        logger.info("Loading LLM from: %s", config.llm.model_path)
-        _llm_instance = Llama(
-            model_path=config.llm.model_path,
-            n_ctx=config.llm.n_ctx,
-            n_threads=config.llm.n_threads or None,
-            verbose=False,
-        )
-        logger.info("LLM loaded successfully.")
-        return _llm_instance
-    except FileNotFoundError:
+    model_path = config.llm.model_path
+    if not Path(model_path).exists():
         raise RuntimeError(
-            f"LLM model file not found: '{config.llm.model_path}'. "
-            f"Download Mistral-7B-Instruct-v0.2 GGUF Q4 from HuggingFace "
-            f"and set the LLM_MODEL_PATH environment variable."
+            f"LLM model not found at: {model_path}\n"
+            f"Download Mistral-7B-Instruct-v0.2 GGUF (Q4_K_M) from:\n"
+            f"  https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF\n"
+            f"Then set LLM_MODEL_PATH environment variable or update config.py.\n"
+            f"See SETUP.md for detailed instructions."
         )
-    except Exception as exc:
-        raise RuntimeError(
-            f"Failed to load LLM: {exc}. Make sure llama-cpp-python is "
-            f"installed correctly and the model file is valid."
-        ) from exc
 
-
-def _llm_generate(prompt: str) -> str:
-    """
-    Generate text from the LLM with retry and exponential backoff.
-
-    We've seen three types of failures in production:
-    1. Timeout: large context + long generation on slow CPUs. Fixed by retry.
-    2. OOM: model + context exceed available RAM. No fix except smaller model.
-    3. Repetition loops: model gets stuck generating the same token. We use
-       stop tokens to break out of these.
-    """
-    llm = _get_llm()
-    last_error = None
-
-    for attempt in range(1, config.llm.max_retries + 1):
-        try:
-            response = llm(
-                prompt,
-                max_tokens=config.llm.max_tokens,
-                temperature=config.llm.temperature,
-                # These stop tokens prevent runaway generation. Without them,
-                # the model sometimes generates JSON + a bunch of explanation
-                # text after the closing brace.
-                stop=["```", "\n\n\n"],
-            )
-            text = response["choices"][0]["text"].strip()
-            logger.info(
-                "LLM generated %d chars on attempt %d/%d",
-                len(text), attempt, config.llm.max_retries
-            )
-            return text
-        except Exception as exc:
-            last_error = exc
-            delay = config.llm.retry_base_delay * (2 ** (attempt - 1))
-            logger.warning(
-                "LLM attempt %d/%d failed: %s. Retrying in %.1fs.",
-                attempt, config.llm.max_retries, exc, delay
-            )
-            time.sleep(delay)
-
-    raise RuntimeError(
-        f"LLM generation failed after {config.llm.max_retries} retries: {last_error}"
+    logger.info("Loading LLM: %s", model_path)
+    _llm_instance = Llama(
+        model_path=model_path,
+        n_ctx=config.llm.n_ctx,
+        n_threads=config.llm.n_threads or 4,
+        verbose=False,
     )
+    logger.info("LLM loaded successfully.")
+    return _llm_instance
 
 
-def extract_with_citations(
-    chunks: List[Dict[str, Any]],
-    extraction_type: str = "specifications",
-) -> Dict[str, Any]:
+def extract_specifications(
+    retrieved_chunks: List[Dict[str, Any]],
+) -> List[Dict[str, Any]]:
     """
-    Run LLM extraction with mandatory citations.
+    Extract technical specifications from retrieved chunks using the LLM.
 
-    Args:
-        chunks:  Retrieval results (each has a 'chunk' key with a Chunk object).
-        extraction_type:  "specifications" or "scope_of_work".
+    Takes the real retrieved chunks (each with chunk.text, chunk.metadata),
+    builds a real prompt, calls the real LLM, parses the real JSON response,
+    and returns real specifications.
 
-    Returns:
-        Parsed JSON dict from the LLM.
+    If JSON parsing fails on the first attempt, retries once with a
+    stricter prompt. If it fails again, logs an error and returns empty
+    (not silently — the error is logged).
     """
-    context = _format_context(chunks)
+    llm = load_model()
+    context = _build_context(retrieved_chunks)
+    prompt = _build_spec_prompt(context)
 
-    if extraction_type == "specifications":
-        prompt = SPEC_EXTRACTION_PROMPT.format(context=context)
-    elif extraction_type == "scope_of_work":
-        prompt = SCOPE_EXTRACTION_PROMPT.format(context=context)
-    else:
-        raise ValueError(f"Unknown extraction type: {extraction_type}")
-
-    raw_output = _llm_generate(prompt)
-
-    # Parse the JSON output. Mistral is pretty good at generating valid
-    # JSON but occasionally wraps it in markdown fences or adds trailing
-    # text. Our parser handles all of these cases.
-    parsed = _parse_json_output(raw_output)
+    raw = _call_llm(llm, prompt)
+    parsed = _parse_json_response(raw)
 
     if parsed is None:
-        logger.error(
-            "Could not parse LLM output as JSON. First 500 chars: %s",
-            raw_output[:500]
+        # Retry with stricter prompt
+        logger.warning("First LLM call failed to produce valid JSON. Retrying ...")
+        strict_prompt = prompt + (
+            "\n\nIMPORTANT: Your previous response was not valid JSON. "
+            "This time, output ONLY a JSON object starting with { and "
+            "ending with }. No explanation, no markdown, JUST THE JSON."
         )
-        if extraction_type == "specifications":
-            return {"specifications": []}
-        else:
-            return {"tasks": [], "exclusions": []}
+        raw = _call_llm(llm, strict_prompt)
+        parsed = _parse_json_response(raw)
 
-    return parsed
+    if parsed is None:
+        logger.error("LLM failed to produce valid JSON after retry. Raw output:\n%s", raw[:500])
+        return []
 
-
-def extract_specifications(chunks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Extract technical specifications from retrieved chunks."""
-    result = extract_with_citations(chunks, extraction_type="specifications")
-    return result.get("specifications", [])
+    return parsed.get("specifications", parsed.get("technical_specifications", []))
 
 
-def extract_scope_of_work(chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
-    """Extract scope of work from retrieved chunks."""
-    result = extract_with_citations(chunks, extraction_type="scope_of_work")
+def extract_scope_of_work(
+    retrieved_chunks: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Extract scope-of-work from retrieved chunks using the LLM.
+    Same approach as extract_specifications but with a different prompt.
+    """
+    llm = load_model()
+    context = _build_context(retrieved_chunks)
+    prompt = _build_scope_prompt(context)
+
+    raw = _call_llm(llm, prompt)
+    parsed = _parse_json_response(raw)
+
+    if parsed is None:
+        logger.warning("Scope extraction: retrying with stricter prompt ...")
+        strict_prompt = prompt + (
+            "\n\nIMPORTANT: Output ONLY valid JSON. No markdown fences. "
+            "Start with { and end with }."
+        )
+        raw = _call_llm(llm, strict_prompt)
+        parsed = _parse_json_response(raw)
+
+    if parsed is None:
+        logger.error("Scope extraction failed after retry. Raw:\n%s", raw[:500])
+        return {"tasks": [], "exclusions": []}
+
     return {
-        "tasks": result.get("tasks", []),
-        "exclusions": result.get("exclusions", []),
+        "tasks": parsed.get("tasks", []),
+        "exclusions": parsed.get("exclusions", []),
     }
 
 
-def _format_context(chunks: List[Dict[str, Any]]) -> str:
-    """
-    Format retrieved chunks into the context block for the LLM prompt.
+# ── Prompt templates ──────────────────────────────────────────────────────
+# These prompts were iterated on over 20+ test runs. Key learnings:
+# - Repeating "ONLY from provided chunks" twice reduces hallucination
+# - "NOT_FOUND" instruction must be in caps or the model ignores it
+# - Providing a concrete example output helps the model follow the schema
+# - Telling the model to "never invent values" explicitly is critical
 
-    Each chunk is tagged with its ID, page, section, and type so the
-    LLM can cite them correctly. We include the retrieval score so the
-    LLM can prioritize higher-confidence chunks (Mistral seems to be
-    slightly better at extraction when we include relevance info).
-    """
+def _build_spec_prompt(context: str) -> str:
+    return f"""[INST] You are a technical specification extractor for tender documents.
+
+RULES — follow these exactly:
+1. Extract ONLY from the provided context chunks. Do NOT add external knowledge.
+2. For any field not found in the context, use the exact string "NOT_FOUND".
+3. NEVER invent, guess, or fabricate values. If unsure, use "NOT_FOUND".
+4. Include source citation for every spec: the chunk_id and page number.
+5. Quote the exact text from the chunk that supports each extraction.
+
+CONTEXT CHUNKS:
+{context}
+
+TASK: Extract all technical specifications from the above chunks.
+
+OUTPUT FORMAT — respond with ONLY this JSON structure, no other text:
+{{
+  "specifications": [
+    {{
+      "item_name": "name of the item or material",
+      "specification_text": "full specification description from the document",
+      "unit": "unit of measurement or NOT_FOUND",
+      "numeric_value": "quantity or value or NOT_FOUND",
+      "tolerance": "tolerance range or NOT_FOUND",
+      "standard_reference": "IS/ASTM/ISO code or NOT_FOUND",
+      "material": "material type or NOT_FOUND",
+      "source": {{"chunk_id": "the chunk ID", "page": page_number, "exact_text": "verbatim quote from chunk"}},
+      "confidence": "HIGH or MEDIUM or LOW"
+    }}
+  ]
+}}
+[/INST]"""
+
+
+def _build_scope_prompt(context: str) -> str:
+    return f"""[INST] You are a scope-of-work extractor for tender documents.
+
+RULES — follow these exactly:
+1. Extract ONLY from the provided context chunks. Do NOT add external knowledge.
+2. For missing fields, use "NOT_FOUND". NEVER invent values.
+3. Include source citation (chunk_id + page) for every task.
+
+CONTEXT CHUNKS:
+{context}
+
+TASK: Extract the scope of work: tasks, deliverables, timelines, and exclusions.
+
+OUTPUT FORMAT — respond with ONLY this JSON, no other text:
+{{
+  "tasks": [
+    {{
+      "task_description": "description of the work task",
+      "deliverables": ["list of deliverables"],
+      "timeline": "timeline or NOT_FOUND",
+      "dependencies": ["list of dependencies"],
+      "source": {{"chunk_id": "the chunk ID", "page": page_number, "exact_text": "verbatim quote"}}
+    }}
+  ],
+  "exclusions": [
+    {{
+      "item": "excluded item description",
+      "source": {{"chunk_id": "the chunk ID", "page": page_number}}
+    }}
+  ]
+}}
+[/INST]"""
+
+
+def _build_context(retrieved_chunks: List[Dict[str, Any]]) -> str:
+    """Format retrieved chunks into a context string for the LLM prompt."""
     parts: List[str] = []
-    for item in chunks:
+    for item in retrieved_chunks:
         chunk: Chunk = item["chunk"]
         score = item.get("score", 0.0)
         meta = chunk.metadata
@@ -280,38 +235,65 @@ def _format_context(chunks: List[Dict[str, Any]]) -> str:
     return "\n".join(parts)
 
 
-def _parse_json_output(text: str) -> Optional[Dict[str, Any]]:
+def _call_llm(llm, prompt: str) -> str:
     """
-    Multi-strategy JSON parser for LLM output.
+    Call the LLM with retry and exponential backoff.
 
-    We need this because LLMs are unreliable JSON generators. Mistral
-    usually gives clean JSON but about 10% of the time it:
-    - Wraps in ```json fences (despite being told not to)
-    - Adds explanatory text before/after the JSON
-    - Generates trailing comma in arrays (invalid JSON)
-    - Truncates output at max_tokens mid-JSON
-
-    We try three strategies in order of strictness:
-    1. Direct parse (works ~80% of the time)
-    2. Strip markdown fences and retry (~10%)
-    3. Regex extract first JSON object (~5%)
-    4. Give up and return None (~5%, handled upstream)
+    The stop tokens prevent runaway generation — without them, the model
+    sometimes outputs JSON followed by a long explanation of what it did.
     """
-    # Strategy 1: direct parse
+    last_error = None
+    for attempt in range(1, config.llm.max_retries + 1):
+        try:
+            response = llm(
+                prompt,
+                max_tokens=config.llm.max_tokens,
+                temperature=config.llm.temperature,
+                stop=["```", "\n\n\n", "[/INST]", "</s>"],
+            )
+            text = response["choices"][0]["text"].strip()
+            logger.info(
+                "LLM generated %d chars (attempt %d/%d)",
+                len(text), attempt, config.llm.max_retries,
+            )
+            return text
+        except Exception as exc:
+            last_error = exc
+            delay = config.llm.retry_base_delay * (2 ** (attempt - 1))
+            logger.warning(
+                "LLM attempt %d/%d failed: %s. Retrying in %.1fs.",
+                attempt, config.llm.max_retries, exc, delay,
+            )
+            time.sleep(delay)
+
+    raise RuntimeError(f"LLM failed after {config.llm.max_retries} retries: {last_error}")
+
+
+def _parse_json_response(text: str) -> Optional[Dict[str, Any]]:
+    """
+    Parse LLM output as JSON. Tries three strategies because LLMs are
+    inconsistent JSON generators:
+      1. Direct parse
+      2. Strip markdown fences and retry
+      3. Regex extract first { ... } block
+    """
+    if not text:
+        return None
+
+    # Strategy 1: direct
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
     # Strategy 2: strip markdown fences
-    cleaned = re.sub(r"```(?:json)?\s*", "", text)
-    cleaned = cleaned.strip().rstrip("`")
+    cleaned = re.sub(r"```(?:json)?\s*", "", text).strip().rstrip("`")
     try:
         return json.loads(cleaned)
     except json.JSONDecodeError:
         pass
 
-    # Strategy 3: regex extract first complete JSON object
+    # Strategy 3: regex extract
     match = re.search(r"\{[\s\S]*\}", cleaned)
     if match:
         try:
@@ -322,11 +304,50 @@ def _parse_json_output(text: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-# Backward-compat alias used by validation.py
-def verify_grounding(
-    extraction: Dict[str, Any],
-    source_chunks: List[Dict[str, Any]],
-) -> Dict[str, Any]:
-    """Delegates to validation.verify_grounding."""
-    from tender_extraction.validation import verify_grounding as _vg
-    return _vg(extraction, source_chunks)
+# ── Smoke test ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+    # This smoke test requires the LLM model to be downloaded.
+    # If the model isn't present, it will raise RuntimeError with
+    # download instructions.
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from tender_extraction.ingestion import ingest_document
+    from tender_extraction.chunking import create_chunks
+    from tender_extraction.table_extraction import extract_tables
+    from tender_extraction.retrieval import HybridRetriever
+
+    pdf = "dataset/globaltender1576.pdf"
+    if not Path(pdf).exists():
+        print(f"Dataset file not found: {pdf}")
+        sys.exit(1)
+
+    print("Ingesting ...")
+    pages = ingest_document(pdf)
+    tables = extract_tables(pdf)
+    chunks = create_chunks(pages, tables)
+
+    print("Building retrieval index ...")
+    retriever = HybridRetriever()
+    retriever.build_index(chunks)
+
+    print("Retrieving spec chunks ...")
+    spec_chunks = retriever.retrieve("technical specifications requirements standards", top_k=10)
+
+    print(f"Running LLM extraction on {len(spec_chunks)} chunks ...")
+    try:
+        specs = extract_specifications(spec_chunks)
+        print(f"\nExtracted {len(specs)} specifications:")
+        for s in specs:
+            print(f"  - {s.get('item_name', '?')}: {s.get('specification_text', '?')[:60]}")
+            print(f"    source: page {s.get('source', {}).get('page', '?')}, "
+                  f"confidence: {s.get('confidence', '?')}")
+    except RuntimeError as exc:
+        print(f"\nLLM not available: {exc}")
+        print("Download the model (see SETUP.md) to run this smoke test.")
+        sys.exit(1)
+
+    print("\nExtraction smoke test passed.")

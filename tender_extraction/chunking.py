@@ -297,3 +297,52 @@ def _short_uuid() -> str:
     """8-char hex ID. Short enough for readability in logs, long enough
     to avoid collisions for typical document sizes (<10k chunks)."""
     return uuid.uuid4().hex[:8]
+
+
+
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from tender_extraction.ingestion import ingest_document
+    from tender_extraction.table_extraction import extract_tables
+
+    pdf = "dataset/globaltender1576.pdf"
+    if not Path(pdf).exists():
+        print(f"Dataset file not found: {pdf}")
+        sys.exit(1)
+
+    print(f"Ingesting {pdf} ...")
+    pages = ingest_document(pdf)
+    tables = extract_tables(pdf)
+
+    print(f"Chunking {len(pages)} pages + {len(tables)} tables ...")
+    chunks = create_chunks(pages, tables)
+
+    # Report by type
+    type_counts = {}
+    for c in chunks:
+        ct = c.metadata.chunk_type
+        type_counts[ct] = type_counts.get(ct, 0) + 1
+    print(f"Total chunks: {len(chunks)} (types: {type_counts})")
+
+    # Report by section (top 10)
+    section_counts = {}
+    for c in chunks:
+        s = c.metadata.section
+        section_counts[s] = section_counts.get(s, 0) + 1
+    top_sections = sorted(section_counts.items(), key=lambda x: -x[1])[:10]
+    print(f"\nTop 10 sections:")
+    for sec, cnt in top_sections:
+        print(f"  {sec[:50]}: {cnt} chunks")
+
+    # Show a few real chunks
+    print(f"\nSample chunks (first 3):")
+    for c in chunks[:3]:
+        print(f"  [{c.chunk_id}] page={c.metadata.page} type={c.metadata.chunk_type}")
+        print(f"    section: {c.metadata.section}")
+        print(f"    text: {c.text[:100]}...")
+
+    print("\nChunking smoke test passed.")

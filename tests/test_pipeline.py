@@ -61,10 +61,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DATASET_DIR = PROJECT_ROOT / "dataset"
 
 
-# ══════════════════════════════════════════════════════════════════════════
-#  Schema tests — make sure Pydantic models work as expected
-# ══════════════════════════════════════════════════════════════════════════
-
 
 def test_spec_schema_defaults():
     """NOT_FOUND defaults should be set for all optional fields."""
@@ -131,10 +127,6 @@ def test_extraction_result_full():
     print("  ✓ test_extraction_result_full")
 
 
-# ══════════════════════════════════════════════════════════════════════════
-#  Chunking tests
-# ══════════════════════════════════════════════════════════════════════════
-
 
 def test_chunking_with_sections():
     """Section headers should propagate into chunk metadata."""
@@ -184,9 +176,6 @@ def test_chunking_table_rows():
     print(f"  ✓ test_chunking_table_rows ({len(chunks)} chunks)")
 
 
-# ══════════════════════════════════════════════════════════════════════════
-#  Table column mapping tests
-# ══════════════════════════════════════════════════════════════════════════
 
 
 def test_column_mapping_standard_headers():
@@ -227,9 +216,6 @@ def test_clean_table_normalizes():
     print("  ✓ test_clean_table_normalizes")
 
 
-# ══════════════════════════════════════════════════════════════════════════
-#  Grounding and validation tests
-# ══════════════════════════════════════════════════════════════════════════
 
 
 def test_grounding_exact_match():
@@ -322,9 +308,7 @@ def test_grounding_integration():
     print(f"  ✓ test_grounding_integration (1 accepted, 1 rejected)")
 
 
-# ══════════════════════════════════════════════════════════════════════════
-#  Example output validation
-# ══════════════════════════════════════════════════════════════════════════
+
 
 
 def test_example_output_validates():
@@ -352,11 +336,7 @@ def test_example_output_validates():
     )
 
 
-# ══════════════════════════════════════════════════════════════════════════
-#  Real dataset tests — smoke tests against actual tender PDFs
-#  These test ingestion and table extraction on real documents.
-#  They don't need the LLM so they're fast and reliable.
-# ══════════════════════════════════════════════════════════════════════════
+
 
 
 def test_real_pdf_ingestion():
@@ -455,10 +435,6 @@ def test_real_pdf_pbmc_tables():
         f"{total_rows} total rows"
     )
 
-
-# ══════════════════════════════════════════════════════════════════════════
-#  Runner
-# ══════════════════════════════════════════════════════════════════════════
 
 
 def run_all_tests():

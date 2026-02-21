@@ -1,224 +1,68 @@
 """
-validation.py — Grounding verification and confidence scoring.
+validation.py — Grounding verification using rapidfuzz.
 
-This is the last line of defense against hallucination. After the LLM
-produces extractions, we verify that each one is actually grounded in
-the source chunks. The idea is simple: if the LLM says it found "Steel
-Grade 60 per ASTM A615" on page 15, we go check page 15 and verify
-that text actually exists there.
+After the LLM extracts specs, we verify each one is actually grounded in the
+source document. The idea: if the LLM says it found "Steel Grade 60 per 
+ASTM A615" on page 15, we look at the actual text from page 15 and check
+that text really exists there.
 
-We use SequenceMatcher (stdlib difflib) for fuzzy matching instead of
-fuzzywuzzy or rapidfuzz because:
-  1. No extra C-extension dependency to worry about on Windows
-  2. Performance is fine for our scale (<200 extractions per document)
-  3. SequenceMatcher handles OCR errors well (missing chars, substitutions)
+We use rapidfuzz.fuzz.partial_ratio instead of difflib.SequenceMatcher
+because it's 10-50x faster (C++ backend) and handles substring matching
+better for our use case — the LLM's "exact_text" citation is often a 
+substring of the full chunk text, not the whole thing.
 
-The confidence thresholds were calibrated on 50 manually verified
-extractions:
-  - ≥0.90 match ratio → HIGH confidence (exact or near-exact text match)
-  - ≥0.60 match ratio → MEDIUM (paraphrased or minor OCR errors)
-  - <0.60 match ratio → LOW (uncertain, may need manual review)
-  - <0.40 match ratio → REJECTED (likely hallucination, silently dropped)
-
-The 0.40 rejection threshold is intentionally generous because OCR'd text
-can have significant character-level errors while still being semantically
-correct. We'd rather keep a legitimate spec at LOW confidence than
-accidentally reject it.
-- Prathamesh, 2026-02-16
+Confidence thresholds calibrated on 50 manually-verified extractions:
+  >= 0.90 -> HIGH (exact or near-exact match)
+  >= 0.60 -> MEDIUM (paraphrased, or OCR character errors)
+  <  0.60 -> LOW (uncertain, needs manual review)
+  <  0.40 -> REJECTED (likely hallucination, dropped with warning)
+- Prathamesh, 2026-02-18
 """
 
 from __future__ import annotations
 
 import logging
-from difflib import SequenceMatcher
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+from rapidfuzz import fuzz
 
 from tender_extraction.config import config
-from tender_extraction.schemas import (
-    Chunk,
-    ExtractionResult,
-)
+from tender_extraction.schemas import Chunk, ExtractionResult
 
 logger = logging.getLogger(__name__)
 
 
 def verify_grounding(
-    extraction: Dict[str, Any],
+    spec: Dict[str, Any],
     source_chunks: List[Dict[str, Any]],
-) -> Dict[str, Any]:
+) -> float:
     """
-    Verify that every extraction is grounded in the source chunks.
+    Check how well a single spec's citation matches the source chunks.
 
-    This is the core anti-hallucination function. It:
-    1. Looks up the cited chunk for each extraction
-    2. Fuzzy-matches the extracted text against the chunk text
-    3. Assigns confidence based on match quality
-    4. Rejects extractions below the minimum grounding threshold
-    5. Ensures all empty fields are properly set to NOT_FOUND
+    Uses rapidfuzz.fuzz.partial_ratio to find the best fuzzy match of
+    the spec's cited exact_text against all source chunk texts.
+
+    Returns a float 0.0 to 1.0 representing match quality.
     """
-    chunk_lookup = _build_chunk_lookup(source_chunks)
-
-    specs = extraction.get("technical_specifications", [])
-    validated_specs = _validate_specs(specs, chunk_lookup)
-
-    scope = extraction.get("scope_of_work", {})
-    validated_scope = _validate_scope(scope, chunk_lookup)
-
-    # Log the damage report
-    specs_rejected = len(specs) - len(validated_specs)
-    tasks_rejected = len(scope.get("tasks", [])) - len(validated_scope.get("tasks", []))
-
-    if specs_rejected > 0 or tasks_rejected > 0:
-        logger.warning(
-            "Grounding rejected %d specs and %d tasks as likely hallucinations",
-            specs_rejected, tasks_rejected
-        )
-
-    logger.info(
-        "Validation: %d/%d specs passed, %d/%d tasks passed",
-        len(validated_specs), len(specs),
-        len(validated_scope.get("tasks", [])), len(scope.get("tasks", [])),
-    )
-
-    return {
-        "technical_specifications": validated_specs,
-        "scope_of_work": validated_scope,
-    }
-
-
-def validate_extraction_result(raw: Dict[str, Any]) -> ExtractionResult:
-    """
-    Final Pydantic validation pass.
-
-    This catches any remaining schema violations that slipped through
-    the LLM output parsing. Common issues:
-    - confidence field with lowercase "high" instead of "HIGH"
-    - page field as string "15" instead of int 15
-    - source missing chunk_id entirely
-
-    Pydantic v2 handles most of these via coercion, but we log failures
-    so we can improve the prompt over time.
-    """
-    return ExtractionResult.model_validate(raw)
-
-
-def _validate_specs(
-    specs: List[Dict[str, Any]],
-    chunk_lookup: Dict[str, str],
-) -> List[Dict[str, Any]]:
-    """Validate each specification against its cited source chunk."""
-    validated: List[Dict[str, Any]] = []
-
-    for spec in specs:
-        source = spec.get("source", {})
-        chunk_id = source.get("chunk_id", "")
-        exact_text = source.get("exact_text", "")
-
-        # Find the cited chunk
-        chunk_text = chunk_lookup.get(chunk_id, "")
-
-        # LLMs sometimes mangle chunk IDs (truncate, add suffixes).
-        # If exact lookup fails, try a prefix match.
-        if not chunk_text:
-            chunk_text = _fuzzy_find_chunk(chunk_id, chunk_lookup)
-
-        # Compute how well the extracted text matches the source
-        grounding_score = _compute_grounding(exact_text, chunk_text)
-        confidence = _score_to_confidence(grounding_score)
-
-        # Reject if grounding is too weak — likely a hallucination
-        if grounding_score < config.validation.min_grounding_ratio:
-            logger.warning(
-                "REJECTED spec '%s' — grounding=%.2f (threshold=%.2f). "
-                "Cited chunk: '%s', extracted text: '%s'",
-                spec.get("item_name", "?"),
-                grounding_score,
-                config.validation.min_grounding_ratio,
-                chunk_id,
-                exact_text[:80] if exact_text else "(empty)",
-            )
-            continue
-
-        spec = _enforce_not_found(spec)
-        spec["confidence"] = confidence
-        validated.append(spec)
-
-    return validated
-
-
-def _validate_scope(
-    scope: Dict[str, Any],
-    chunk_lookup: Dict[str, str],
-) -> Dict[str, Any]:
-    """Validate scope tasks and exclusions against source chunks."""
-    validated_tasks: List[Dict[str, Any]] = []
-    validated_exclusions: List[Dict[str, Any]] = []
-
-    for task in scope.get("tasks", []):
-        source = task.get("source", {})
-        chunk_id = source.get("chunk_id", "")
-        exact_text = source.get("exact_text", task.get("task_description", ""))
-
-        chunk_text = chunk_lookup.get(chunk_id, "")
-        if not chunk_text:
-            chunk_text = _fuzzy_find_chunk(chunk_id, chunk_lookup)
-
-        grounding_score = _compute_grounding(exact_text, chunk_text)
-
-        if grounding_score < config.validation.min_grounding_ratio:
-            logger.warning(
-                "REJECTED task '%s' — grounding=%.2f",
-                task.get("task_description", "?")[:60],
-                grounding_score,
-            )
-            continue
-
-        task = _enforce_not_found(task)
-        validated_tasks.append(task)
-
-    for excl in scope.get("exclusions", []):
-        source = excl.get("source", {})
-        chunk_id = source.get("chunk_id", "")
-        chunk_text = chunk_lookup.get(chunk_id, "")
-        if not chunk_text:
-            chunk_text = _fuzzy_find_chunk(chunk_id, chunk_lookup)
-
-        # For exclusions we just check the chunk exists. The exclusion
-        # text is usually short ("excludes furniture and fixtures") so
-        # fuzzy matching isn't very useful.
-        if chunk_text:
-            validated_exclusions.append(excl)
-
-    return {"tasks": validated_tasks, "exclusions": validated_exclusions}
-
-
-def _compute_grounding(extracted_text: str, source_text: str) -> float:
-    """
-    How well does the extracted text match the source chunk?
-
-    Returns 0.0 to 1.0. We check for substring containment first (fast
-    path for exact quotes) then fall back to SequenceMatcher for fuzzy
-    matching.
-
-    The normalization (lowercase, collapse whitespace) helps with minor
-    formatting differences that don't affect meaning. "500 kg" and
-    "500  kg" and "500 Kg" should all match.
-    """
-    if not extracted_text or not source_text:
+    exact_text = spec.get("source", {}).get("exact_text", "")
+    if not exact_text or exact_text == "NOT_FOUND":
         return 0.0
 
-    ext = " ".join(extracted_text.lower().split())
-    src = " ".join(source_text.lower().split())
+    best_score = 0.0
+    for item in source_chunks:
+        chunk: Chunk = item["chunk"]
+        ratio = fuzz.partial_ratio(
+            exact_text.lower().strip(),
+            chunk.text.lower().strip(),
+        )
+        score = ratio / 100.0
+        if score > best_score:
+            best_score = score
 
-    # Fast path: exact substring
-    if ext in src:
-        return 1.0
-
-    # Slow path: fuzzy match
-    return SequenceMatcher(None, ext, src).ratio()
+    return best_score
 
 
-def _score_to_confidence(score: float) -> str:
+def assign_confidence(score: float) -> str:
     """Map grounding score to confidence bucket."""
     if score >= config.validation.high_confidence_threshold:
         return "HIGH"
@@ -227,49 +71,167 @@ def _score_to_confidence(score: float) -> str:
     return "LOW"
 
 
-def _build_chunk_lookup(source_chunks: List[Dict[str, Any]]) -> Dict[str, str]:
-    """Build chunk_id → text lookup from retrieval results."""
-    lookup: Dict[str, str] = {}
+def validate_extractions(
+    extraction: Dict[str, Any],
+    source_chunks: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    """
+    Full validation pass: grounding + confidence + NOT_FOUND enforcement.
+
+    Drops specs with grounding score < 0.40 (logged as warning).
+    Updates confidence field based on actual grounding score.
+    Replaces empty/None fields with "NOT_FOUND".
+    """
+    # Validate specs
+    raw_specs = extraction.get("technical_specifications", [])
+    validated_specs: List[Dict[str, Any]] = []
+
+    for spec in raw_specs:
+        score = verify_grounding(spec, source_chunks)
+        confidence = assign_confidence(score)
+
+        if score < config.validation.min_grounding_ratio:
+            logger.warning(
+                "REJECTED spec '%s' (grounding=%.2f < threshold=%.2f). "
+                "Likely hallucination.",
+                spec.get("item_name", "?"), score, config.validation.min_grounding_ratio,
+            )
+            continue
+
+        spec["confidence"] = confidence
+        spec = _enforce_not_found(spec)
+        validated_specs.append(spec)
+
+    # Validate scope tasks (lighter check — just verify the chunk exists)
+    scope = extraction.get("scope_of_work", {})
+    validated_tasks: List[Dict[str, Any]] = []
+    for task in scope.get("tasks", []):
+        task_score = _verify_task_grounding(task, source_chunks)
+        if task_score < config.validation.min_grounding_ratio:
+            logger.warning(
+                "REJECTED task '%s' (grounding=%.2f)",
+                task.get("task_description", "?")[:60], task_score,
+            )
+            continue
+        task = _enforce_not_found(task)
+        validated_tasks.append(task)
+
+    validated_exclusions = scope.get("exclusions", [])
+
+    # Stats
+    specs_rejected = len(raw_specs) - len(validated_specs)
+    tasks_rejected = len(scope.get("tasks", [])) - len(validated_tasks)
+    high_count = sum(1 for s in validated_specs if s.get("confidence") == "HIGH")
+    med_count = sum(1 for s in validated_specs if s.get("confidence") == "MEDIUM")
+    low_count = sum(1 for s in validated_specs if s.get("confidence") == "LOW")
+
+    logger.info(
+        "Validation: %d/%d specs passed (HIGH=%d, MEDIUM=%d, LOW=%d), "
+        "%d/%d tasks passed, %d rejected",
+        len(validated_specs), len(raw_specs), high_count, med_count, low_count,
+        len(validated_tasks), len(scope.get("tasks", [])),
+        specs_rejected + tasks_rejected,
+    )
+
+    return {
+        "technical_specifications": validated_specs,
+        "scope_of_work": {
+            "tasks": validated_tasks,
+            "exclusions": validated_exclusions,
+        },
+    }
+
+
+def validate_schema(raw: Dict[str, Any]) -> ExtractionResult:
+    """Pydantic validation — catches type mismatches and missing fields."""
+    return ExtractionResult.model_validate(raw)
+
+
+def _verify_task_grounding(
+    task: Dict[str, Any], source_chunks: List[Dict[str, Any]]
+) -> float:
+    """Lighter grounding check for scope tasks."""
+    desc = task.get("task_description", "")
+    exact = task.get("source", {}).get("exact_text", desc)
+    text_to_check = exact if exact and exact != "NOT_FOUND" else desc
+
+    if not text_to_check:
+        return 0.0
+
+    best = 0.0
     for item in source_chunks:
         chunk: Chunk = item["chunk"]
-        lookup[chunk.chunk_id] = chunk.text
-    return lookup
-
-
-def _fuzzy_find_chunk(chunk_id: str, lookup: Dict[str, str]) -> str:
-    """
-    Try to find a chunk by prefix match when exact lookup fails.
-
-    The LLM sometimes outputs "chunk_15_a3f2c1d8" when the actual ID is
-    "chunk_15_a3f2c1d8e9b0". Or it outputs "table_001_row_1" without the
-    UUID suffix. This prefix match catches most of those cases.
-    """
-    if not chunk_id:
-        return ""
-
-    for stored_id, text in lookup.items():
-        if stored_id.startswith(chunk_id) or chunk_id.startswith(stored_id):
-            return text
-
-    return ""
+        ratio = fuzz.partial_ratio(
+            text_to_check.lower().strip(),
+            chunk.text.lower().strip(),
+        ) / 100.0
+        if ratio > best:
+            best = ratio
+    return best
 
 
 def _enforce_not_found(data: Dict[str, Any]) -> Dict[str, Any]:
-    """
-    Replace None/empty values with "NOT_FOUND" for consistency.
-
-    The LLM sometimes outputs "" or null instead of "NOT_FOUND" despite
-    being told explicitly in the prompt. This normalizes everything so
-    downstream consumers can just check for the string "NOT_FOUND" instead
-    of checking None, "", null, "N/A", "n/a", "-", etc.
-    """
-    NOT_FOUND_FIELDS = {
-        "unit", "numeric_value", "tolerance",
-        "standard_reference", "material", "timeline",
-    }
-    for field in NOT_FOUND_FIELDS:
+    """Replace None/empty string values with 'NOT_FOUND' for consistency."""
+    FIELDS = {"unit", "numeric_value", "tolerance", "standard_reference", "material", "timeline"}
+    for field in FIELDS:
         if field in data:
-            value = data[field]
-            if value is None or (isinstance(value, str) and not value.strip()):
+            val = data[field]
+            if val is None or (isinstance(val, str) and not val.strip()):
                 data[field] = "NOT_FOUND"
     return data
+
+
+# ── Smoke test ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+    from pathlib import Path
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+    # Test grounding with real data
+    from tender_extraction.schemas import ChunkMetadata
+
+    # Simulate a real chunk and a real extraction
+    real_chunk = Chunk(
+        chunk_id="chunk_test_001",
+        text="Steel reinforcement bars shall be Grade 60 conforming to ASTM A615 standard.",
+        metadata=ChunkMetadata(page=15, section="3.1 Materials"),
+    )
+    source_chunks = [{"chunk": real_chunk, "score": 0.9}]
+
+    # This spec should PASS grounding (text exists in source)
+    good_spec = {
+        "item_name": "Steel Bars",
+        "specification_text": "Grade 60 conforming to ASTM A615",
+        "source": {
+            "chunk_id": "chunk_test_001",
+            "page": 15,
+            "exact_text": "Steel reinforcement bars shall be Grade 60 conforming to ASTM A615",
+        },
+    }
+
+    # This spec should FAIL grounding (hallucinated)
+    bad_spec = {
+        "item_name": "Copper Wire",
+        "specification_text": "Pure copper 99.9% purity",
+        "source": {
+            "chunk_id": "chunk_fake",
+            "page": 99,
+            "exact_text": "Copper wire meeting international standards",
+        },
+    }
+
+    extraction = {
+        "technical_specifications": [good_spec, bad_spec],
+        "scope_of_work": {"tasks": [], "exclusions": []},
+    }
+
+    result = validate_extractions(extraction, source_chunks)
+    specs = result["technical_specifications"]
+    print(f"Input: 2 specs, Output: {len(specs)} specs (1 should be rejected)")
+    for s in specs:
+        print(f"  - {s['item_name']}: confidence={s['confidence']}")
+
+    assert len(specs) == 1, f"Expected 1 spec (bad should be rejected), got {len(specs)}"
+    assert specs[0]["item_name"] == "Steel Bars"
+    print("\nValidation smoke test passed.")

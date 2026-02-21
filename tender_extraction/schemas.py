@@ -1,50 +1,32 @@
 """
-schemas.py — Pydantic v2 models that define the extraction contract.
+schemas.py — Pydantic v2 models with strict validation.
 
-These models serve three purposes:
-1. Constrained LLM output validation (anti-hallucination layer)
-2. API response serialization
-3. NOT_FOUND defaults so downstream code never has to check for None
+These models define the extraction contract. Every field has a type,
+every optional field defaults to "NOT_FOUND", and there's a field_validator
+that rejects empty specification_text (the most common LLM failure mode).
 
-We moved to Pydantic v2 from v1 in Feb 2026 because v2's model_validate()
-is ~3x faster — matters when we're validating 200+ specs per document.
-The migration was mostly painless except for the validator decorator
-rename (validator → field_validator). - Prathamesh, 2026-02-12
+We moved to Pydantic v2 because model_validate() is ~3x faster than v1's
+parse_obj(), which matters when validating 200+ specs per document.
+- Prathamesh, 2026-02-12
 """
 
 from __future__ import annotations
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class SourceCitation(BaseModel):
-    """
-    Where in the document an extraction came from.
-    
-    Every single extracted field MUST have one of these. If the LLM
-    doesn't provide a citation, the extraction gets rejected in the
-    validation stage. This was the single biggest improvement to our
-    hallucination rate — dropped from ~15% to ~3% just by making
-    citations mandatory.
-    """
+    """Where in the document an extraction came from."""
     chunk_id: str = Field(..., description="ID of the source chunk")
-    page: int = Field(..., description="1-based page number in original document")
+    page: int = Field(..., description="1-based page number")
     exact_text: str = Field(
         default="NOT_FOUND",
-        description="Verbatim quote from the chunk. Used for grounding verification.",
+        description="Verbatim quote from the source chunk",
     )
 
 
 class TechnicalSpecification(BaseModel):
-    """
-    A single technical specification pulled from a tender document.
-    
-    The field list was designed around what procurement teams actually
-    need when evaluating bids. We worked with 3 procurement officers to
-    nail down these fields. Originally we had 15 fields but cut it to
-    these 7 because the LLM accuracy dropped significantly beyond 7
-    fields per extraction — it starts confusing tolerance with unit.
-    """
+    """A single technical spec extracted from a tender."""
     item_name: str
     specification_text: str
     unit: str = Field(default="NOT_FOUND")
@@ -54,6 +36,13 @@ class TechnicalSpecification(BaseModel):
     material: str = Field(default="NOT_FOUND")
     source: SourceCitation
     confidence: Literal["HIGH", "MEDIUM", "LOW"] = Field(default="LOW")
+
+    @field_validator("specification_text")
+    @classmethod
+    def spec_text_must_not_be_empty(cls, v: str) -> str:
+        if not v or not v.strip():
+            raise ValueError("specification_text cannot be empty or whitespace")
+        return v
 
 
 class ScopeTask(BaseModel):
@@ -66,13 +55,7 @@ class ScopeTask(BaseModel):
 
 
 class Exclusion(BaseModel):
-    """
-    An item explicitly excluded from scope.
-    
-    Tracking exclusions matters a LOT — contractors have filed claims
-    worth crores because exclusions weren't captured properly from the
-    original tender. That's why we extract these separately.
-    """
+    """An item explicitly excluded from the scope."""
     item: str
     source: SourceCitation
 
@@ -84,28 +67,18 @@ class ScopeOfWork(BaseModel):
 
 
 class ExtractionResult(BaseModel):
-    """
-    Top-level output of the entire pipeline.
-    
-    This is what gets serialized to JSON and handed to the user.
-    We keep it flat (just specs + scope) rather than nesting deeper
-    because every level of nesting made the LLM output less reliable.
-    """
-    technical_specifications: List[TechnicalSpecification] = Field(
-        default_factory=list
-    )
+    """Top-level output of the entire pipeline."""
+    technical_specifications: List[TechnicalSpecification] = Field(default_factory=list)
     scope_of_work: ScopeOfWork = Field(default_factory=ScopeOfWork)
 
 
-# -- Internal models used within the pipeline, not exposed to users --
+# Internal models used within the pipeline
 
 class ChunkMetadata(BaseModel):
-    """Rich metadata attached to every chunk for retrieval context."""
+    """Metadata attached to every chunk."""
     section: str = Field(default="Unknown")
     parent_section: str = Field(default="Unknown")
-    chunk_type: Literal["table", "paragraph", "list", "image_ocr"] = Field(
-        default="paragraph"
-    )
+    chunk_type: Literal["table", "paragraph", "list", "image_ocr"] = Field(default="paragraph")
     page: int = Field(default=0)
     table_id: Optional[str] = Field(default=None)
     bbox: Optional[List[float]] = Field(default=None)
@@ -116,3 +89,50 @@ class Chunk(BaseModel):
     chunk_id: str
     text: str
     metadata: ChunkMetadata
+
+
+# ── Smoke test ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+
+    # Test 1: valid spec
+    spec = TechnicalSpecification(
+        item_name="Steel Bars",
+        specification_text="Grade 60 conforming to ASTM A615",
+        unit="kg",
+        source=SourceCitation(chunk_id="chunk_001", page=15),
+    )
+    assert spec.unit == "kg"
+    assert spec.tolerance == "NOT_FOUND"
+    assert spec.confidence == "LOW"
+    print("Test 1 passed: valid spec with defaults")
+
+    # Test 2: empty spec_text should fail
+    try:
+        bad = TechnicalSpecification(
+            item_name="Bad",
+            specification_text="   ",
+            source=SourceCitation(chunk_id="x", page=1),
+        )
+        print("Test 2 FAILED: should have raised ValidationError")
+        sys.exit(1)
+    except Exception:
+        print("Test 2 passed: empty spec_text rejected")
+
+    # Test 3: full ExtractionResult round-trip
+    result = ExtractionResult(
+        technical_specifications=[spec],
+        scope_of_work=ScopeOfWork(
+            tasks=[ScopeTask(
+                task_description="Site prep",
+                source=SourceCitation(chunk_id="c2", page=8),
+            )],
+        ),
+    )
+    data = result.model_dump()
+    assert len(data["technical_specifications"]) == 1
+    assert data["scope_of_work"]["tasks"][0]["timeline"] == "NOT_FOUND"
+    print("Test 3 passed: full ExtractionResult round-trip")
+
+    print("\nAll schema tests passed.")

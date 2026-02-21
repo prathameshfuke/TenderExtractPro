@@ -252,3 +252,33 @@ def _validate_file(path: Path) -> None:
             f"Unsupported format '{path.suffix}'. "
             f"Supported: {', '.join(config.supported_formats)}"
         )
+
+
+# ── Smoke test ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+    pdf = "dataset/globaltender1576.pdf"
+    if not Path(pdf).exists():
+        print(f"Dataset file not found: {pdf}")
+        sys.exit(1)
+
+    print(f"Ingesting {pdf} ...")
+    pages = ingest_document(pdf)
+    print(f"Pages: {len(pages)}")
+    print(f"  Text pages: {sum(1 for p in pages if not p['is_ocr'])}")
+    print(f"  OCR pages: {sum(1 for p in pages if p['is_ocr'])}")
+    print(f"  Total chars: {sum(len(p['text']) for p in pages):,}")
+
+    # Show page 21 content (should have real tender spec text)
+    if len(pages) >= 21:
+        p21 = pages[20]
+        print(f"\n--- Page 21 (first 500 chars) ---")
+        print(p21["text"][:500])
+    else:
+        print(f"\nOnly {len(pages)} pages, showing page 1:")
+        print(pages[0]["text"][:500])
+
+    print("\nIngestion smoke test passed.")

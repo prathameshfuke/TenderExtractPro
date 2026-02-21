@@ -1,158 +1,138 @@
 """
-retrieval.py — Hybrid BM25 + semantic embedding retrieval.
+retrieval.py — Hybrid BM25 + FAISS retrieval with disk persistence.
 
-The hybrid approach exists because neither BM25 nor embeddings alone
-are good enough for tender documents:
+This is the core RAG module. It builds two indexes:
+  1. BM25Okapi for keyword-level matching (catches standard codes like "IS 456")
+  2. FAISS IndexFlatIP for semantic similarity (catches "rebar" = "steel bars")
 
-  - BM25 excels at exact matches: standard codes ("IS 456", "ASTM A615"),
-    item numbers, and specific technical terms that the embedding model
-    hasn't seen in training. Without BM25, searching for "IS 456" would
-    return chunks about "Indian Standard 456" but miss chunks that just
-    say "IS 456" without the full name.
+Both indexes are persisted to disk so we don't rebuild them every time.
+The BM25 index is pickled, FAISS uses its native write_index/read_index.
 
-  - Embeddings excel at semantic understanding: "rebar" and "steel
-    reinforcement bars" are the same thing but BM25 will miss one if
-    you search for the other. Embeddings also handle paraphrased queries
-    like "what kind of cement?" matching "OPC Grade 53 conforming to..."
-
-The weighted fusion (0.4 BM25 + 0.6 embeddings) was tuned on 100 manually
-labeled queries against 5 tenders. We tested weights from 0.1/0.9 to
-0.9/0.1 in 0.1 steps. 0.4/0.6 gave the best MRR@10 (0.82 vs 0.71 for
-pure BM25 and 0.74 for pure embeddings). The semantic side gets more
-weight because tender queries tend to be natural language, not keyword
-searches.
-
-We use FAISS IndexFlatIP (brute-force inner product on normalized vectors)
-rather than an approximate index like IVF because our corpus is small
-(<5000 chunks per document). At this scale, brute force is actually faster
-than building an IVF index and the recall is perfect.
-- Prathamesh, 2026-02-13
+Score fusion: 0.4 * BM25_normalized + 0.6 * FAISS_cosine. The 0.6 embedding
+weight was tuned on 100 manually-labeled queries against 5 tenders. Pure BM25
+gave MRR@10 of 0.71, pure embeddings 0.74, hybrid 0.82. The semantic side
+gets more weight because tender queries are usually natural language, not
+keyword searches. But BM25 is essential for exact standard codes.
+- Prathamesh, 2026-02-18
 """
 
 from __future__ import annotations
 
 import logging
+import os
+import pickle
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import faiss
 import numpy as np
+from rank_bm25 import BM25Okapi
+from sentence_transformers import SentenceTransformer
 
 from tender_extraction.config import config
 from tender_extraction.schemas import Chunk
 
 logger = logging.getLogger(__name__)
 
+# Singleton embedding model — takes 3-5s to load from disk, so cache it.
+_embed_model: Optional[SentenceTransformer] = None
+
+
+def _get_embed_model() -> SentenceTransformer:
+    """Lazy-load and cache the sentence-transformer model."""
+    global _embed_model
+    if _embed_model is None:
+        model_name = config.retrieval.embedding_model
+        logger.info("Loading embedding model: %s ...", model_name)
+        _embed_model = SentenceTransformer(model_name)
+        logger.info("Embedding model loaded (dim=%d).", _embed_model.get_sentence_embedding_dimension())
+    return _embed_model
+
 
 class HybridRetriever:
     """
-    Hybrid BM25 + semantic-embedding retriever.
+    Hybrid BM25 + semantic-embedding retriever with disk persistence.
 
-    Create once per document, then query as many times as needed.
-    The index build is the expensive part (~5s for the embedding model
-    load + encoding). Individual queries are <100ms.
+    Usage:
+        retriever = HybridRetriever()
+        retriever.build_index(chunks)
+        retriever.save("index_dir/")
+
+        # Later:
+        retriever = HybridRetriever.load("index_dir/")
+        results = retriever.retrieve("steel reinforcement grade", top_k=10)
     """
 
-    def __init__(self, chunks: Optional[List[Chunk]] = None):
+    def __init__(self):
         self._chunks: List[Chunk] = []
-        self._bm25 = None
-        self._faiss_index = None
-        self._embeddings: Optional[np.ndarray] = None
-        self._embed_model = None
+        self._bm25: Optional[BM25Okapi] = None
+        self._faiss_index: Optional[faiss.IndexFlatIP] = None
+        self._tokenized_corpus: List[List[str]] = []
 
-        if chunks:
-            self.index(chunks)
+    def build_index(self, chunks: List[Chunk]) -> None:
+        """
+        Build both BM25 and FAISS indexes from a list of chunks.
+        This is the expensive step — encoding 5000 chunks takes ~8s on CPU.
+        """
+        if not chunks:
+            raise ValueError("Cannot build index from empty chunk list.")
 
-    def index(self, chunks: List[Chunk]) -> None:
-        """Build both indexes. Call this once per document."""
         self._chunks = chunks
         texts = [c.text for c in chunks]
 
-        logger.info("Building indexes for %d chunks ...", len(chunks))
-        self._build_bm25(texts)
-        self._build_faiss(texts)
-        logger.info("Indexing complete.")
+        # BM25 index — simple whitespace tokenization + lowercase.
+        # We tried NLTK word_tokenize but it was 10x slower and only
+        # improved BM25 accuracy by ~1%, not worth it.
+        logger.info("Building BM25 index for %d chunks ...", len(texts))
+        self._tokenized_corpus = [t.lower().split() for t in texts]
+        self._bm25 = BM25Okapi(self._tokenized_corpus)
 
-    def _build_bm25(self, texts: List[str]) -> None:
-        """
-        BM25 index over tokenized chunk text.
-
-        We use simple whitespace tokenization + lowercase. We tried NLTK
-        word_tokenize but it was 10x slower and only improved BM25 accuracy
-        by ~1%. Not worth the extra dependency and processing time for
-        the marginal gain, especially since BM25 is only 40% of the
-        final score anyway.
-        """
-        from rank_bm25 import BM25Okapi
-
-        tokenized = [t.lower().split() for t in texts]
-        self._bm25 = BM25Okapi(tokenized)
-
-    def _build_faiss(self, texts: List[str]) -> None:
-        """
-        Encode all chunks and build a FAISS inner-product index.
-
-        L2-normalizing the vectors first so that inner product = cosine
-        similarity. We benchmarked cosine vs dot product on our test set
-        and cosine was 3% better at MRR@10 (makes sense since our vectors
-        have varying norms from the sentence-transformer model).
-        """
-        import faiss
-
-        embeddings = self._encode(texts)
+        # FAISS index — encode all chunks, L2-normalize, build IP index.
+        # L2-normalized + inner product = cosine similarity.
+        logger.info("Encoding chunks for FAISS ...")
+        model = _get_embed_model()
+        embeddings = model.encode(texts, show_progress_bar=False, convert_to_numpy=True)
+        embeddings = embeddings.astype("float32")
         faiss.normalize_L2(embeddings)
-        self._embeddings = embeddings
 
         dim = embeddings.shape[1]
         self._faiss_index = faiss.IndexFlatIP(dim)
         self._faiss_index.add(embeddings)
-        logger.info("FAISS index built: %d vectors, dim=%d", len(texts), dim)
 
-    def _encode(self, texts: List[str]) -> np.ndarray:
-        """
-        Encode texts using the sentence-transformer model.
-
-        The model is lazy-loaded and cached because it takes ~3-5s to load
-        from disk. Encoding 5000 chunks takes ~8s on CPU with MiniLM-L6,
-        which is acceptable. We tried the larger e5-base-v2 model — 5%
-        better accuracy but 4x slower encoding. For our use case (tender
-        docs, not multi-domain search), MiniLM is plenty good.
-        """
-        if self._embed_model is None:
-            from sentence_transformers import SentenceTransformer
-
-            logger.info("Loading embedding model: %s ...", config.retrieval.embedding_model)
-            self._embed_model = SentenceTransformer(config.retrieval.embedding_model)
-            logger.info("Embedding model loaded.")
-
-        embeddings = self._embed_model.encode(
-            texts, show_progress_bar=False, convert_to_numpy=True
+        logger.info(
+            "Index built: %d chunks, BM25 vocab=%d tokens, FAISS dim=%d",
+            len(chunks), sum(len(t) for t in self._tokenized_corpus), dim,
         )
-        return embeddings.astype("float32")
 
-    def hybrid_retrieve(
-        self,
-        query: str,
-        top_k: Optional[int] = None,
-    ) -> List[Dict[str, Any]]:
+    def retrieve(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
         """
-        Retrieve the top-k most relevant chunks using weighted hybrid fusion.
+        Hybrid retrieval: BM25 + FAISS with weighted score fusion.
 
-        Returns a list of dicts with: chunk, score, bm25_score, embedding_score.
-        Scores are all in [0, 1] after normalization.
+        Returns list of dicts: {chunk, score, bm25_score, embedding_score}.
+        All scores normalized to [0, 1].
         """
-        if not self._chunks:
-            logger.warning("No chunks indexed. Returning empty results.")
-            return []
+        if self._bm25 is None or self._faiss_index is None:
+            raise RuntimeError("Index not built. Call build_index() first.")
 
-        if top_k is None:
-            top_k = config.retrieval.top_k
+        n = len(self._chunks)
 
-        # Get raw scores from both systems
-        bm25_raw = self._bm25_scores(query)
-        emb_raw = self._embedding_scores(query)
+        # BM25 scores
+        query_tokens = query.lower().split()
+        bm25_raw = np.array(self._bm25.get_scores(query_tokens), dtype="float32")
 
-        # Normalize to [0, 1] so the weights are meaningful.
-        # Without normalization, BM25 scores (typically 0-20) would dominate
-        # embedding scores (typically 0-1) regardless of the weight split.
+        # FAISS scores (cosine similarity on normalized vectors)
+        model = _get_embed_model()
+        q_emb = model.encode([query], convert_to_numpy=True).astype("float32")
+        faiss.normalize_L2(q_emb)
+        faiss_scores_raw, faiss_indices = self._faiss_index.search(q_emb, n)
+
+        # Build per-chunk FAISS score array
+        emb_raw = np.zeros(n, dtype="float32")
+        for score, idx in zip(faiss_scores_raw[0], faiss_indices[0]):
+            if 0 <= idx < n:
+                emb_raw[idx] = score
+
+        # Min-max normalize both to [0, 1]
         bm25_norm = _min_max_normalize(bm25_raw)
         emb_norm = _min_max_normalize(emb_raw)
 
@@ -161,66 +141,121 @@ class HybridRetriever:
         w_emb = config.retrieval.embedding_weight
         fused = w_bm25 * bm25_norm + w_emb * emb_norm
 
-        # Sort descending and take top-k
+        # Sort and take top_k
         top_indices = np.argsort(fused)[::-1][:top_k]
 
         results: List[Dict[str, Any]] = []
         for idx in top_indices:
-            results.append({
-                "chunk": self._chunks[idx],
-                "score": float(fused[idx]),
-                "bm25_score": float(bm25_norm[idx]),
-                "embedding_score": float(emb_norm[idx]),
-            })
+            if fused[idx] > 0:
+                results.append({
+                    "chunk": self._chunks[idx],
+                    "score": float(fused[idx]),
+                    "bm25_score": float(bm25_norm[idx]),
+                    "embedding_score": float(emb_norm[idx]),
+                })
 
-        if results:
-            logger.info(
-                "Retrieved %d chunks for query '%s...' (top score: %.3f)",
-                len(results), query[:40], results[0]["score"]
-            )
+        logger.info(
+            "Retrieved %d chunks for '%s...' (top=%.3f)",
+            len(results), query[:40], results[0]["score"] if results else 0.0,
+        )
         return results
 
-    def _bm25_scores(self, query: str) -> np.ndarray:
-        tokens = query.lower().split()
-        scores = self._bm25.get_scores(tokens)
-        return np.array(scores, dtype="float32")
+    def save(self, directory: str) -> None:
+        """Persist indexes and chunks to disk."""
+        path = Path(directory)
+        path.mkdir(parents=True, exist_ok=True)
 
-    def _embedding_scores(self, query: str) -> np.ndarray:
-        """Cosine similarity of the query against all indexed chunks."""
-        import faiss
+        # Save chunks
+        with open(path / "chunks.pkl", "wb") as f:
+            pickle.dump(self._chunks, f)
 
-        q_emb = self._encode([query])
-        faiss.normalize_L2(q_emb)
+        # Save BM25 (the whole object + tokenized corpus)
+        with open(path / "bm25.pkl", "wb") as f:
+            pickle.dump({"bm25": self._bm25, "corpus": self._tokenized_corpus}, f)
 
-        # Search all chunks — brute force is fine at <5000 scale
-        scores, indices = self._faiss_index.search(q_emb, len(self._chunks))
-        score_map = np.zeros(len(self._chunks), dtype="float32")
-        for score, idx in zip(scores[0], indices[0]):
-            if idx >= 0:
-                score_map[idx] = score
-        return score_map
+        # Save FAISS index
+        faiss.write_index(self._faiss_index, str(path / "faiss.index"))
 
+        logger.info("Index saved to: %s", directory)
 
-# Convenience function for one-off use (builds index every time — use
-# the class directly if you're running multiple queries on the same doc)
-def hybrid_retrieve(
-    query: str,
-    chunks: List[Chunk],
-    top_k: int = 10,
-) -> List[Dict[str, Any]]:
-    """One-shot convenience wrapper: build index + retrieve."""
-    retriever = HybridRetriever(chunks)
-    return retriever.hybrid_retrieve(query, top_k=top_k)
+    @classmethod
+    def load(cls, directory: str) -> "HybridRetriever":
+        """Load indexes from disk."""
+        path = Path(directory)
+        retriever = cls()
+
+        with open(path / "chunks.pkl", "rb") as f:
+            retriever._chunks = pickle.load(f)
+
+        with open(path / "bm25.pkl", "rb") as f:
+            data = pickle.load(f)
+            retriever._bm25 = data["bm25"]
+            retriever._tokenized_corpus = data["corpus"]
+
+        retriever._faiss_index = faiss.read_index(str(path / "faiss.index"))
+
+        logger.info(
+            "Index loaded from %s (%d chunks)", directory, len(retriever._chunks),
+        )
+        return retriever
 
 
 def _min_max_normalize(arr: np.ndarray) -> np.ndarray:
-    """
-    Min-max normalization to [0, 1].
-
-    Returns zeros if all values are the same (avoids division by zero).
-    This edge case happens when a very short query matches nothing in BM25.
-    """
+    """Normalize to [0, 1]. Returns zeros if all values identical."""
     mn, mx = arr.min(), arr.max()
     if mx - mn < 1e-9:
         return np.zeros_like(arr)
     return (arr - mn) / (mx - mn)
+
+
+# ── Smoke test ────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    import sys
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
+
+    # Quick smoke test using real chunks
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from tender_extraction.ingestion import ingest_document
+    from tender_extraction.chunking import create_chunks
+    from tender_extraction.table_extraction import extract_tables
+
+    pdf = "dataset/globaltender1576.pdf"
+    if not Path(pdf).exists():
+        print(f"Dataset file not found: {pdf}")
+        sys.exit(1)
+
+    print(f"Ingesting {pdf} ...")
+    pages = ingest_document(pdf)
+    tables = extract_tables(pdf)
+    chunks = create_chunks(pages, tables)
+    print(f"Created {len(chunks)} chunks.")
+
+    print("Building hybrid index ...")
+    retriever = HybridRetriever()
+    retriever.build_index(chunks)
+
+    # Test retrieval with a real query
+    queries = [
+        "technical specifications requirements",
+        "scope of work deliverables",
+        "steel reinforcement grade specification",
+    ]
+    for q in queries:
+        results = retriever.retrieve(q, top_k=5)
+        print(f"\nQuery: '{q}'")
+        for r in results:
+            c = r["chunk"]
+            print(f"  score={r['score']:.3f} page={c.metadata.page} "
+                  f"type={c.metadata.chunk_type}: {c.text[:80]}...")
+
+    # Test persistence
+    retriever.save("_test_index")
+    loaded = HybridRetriever.load("_test_index")
+    results2 = loaded.retrieve("technical specifications", top_k=3)
+    print(f"\nAfter save/load: {len(results2)} results (should be 3)")
+
+    # Cleanup
+    import shutil
+    shutil.rmtree("_test_index", ignore_errors=True)
+    print("\nRetrieval smoke test passed.")
