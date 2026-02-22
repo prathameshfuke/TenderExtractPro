@@ -202,7 +202,10 @@ class TenderExtractionPipeline:
         # Pydantic schema enforcement
         try:
             result_model = validate_schema(validated)
-            final_result = result_model.dict()
+            if hasattr(result_model, 'model_dump'):
+                final_result = result_model.model_dump()
+            else:
+                final_result = result_model.dict()
         except Exception as exc:
             logger.warning("Pydantic validation issue: %s. Using raw result.", exc)
             final_result = validated

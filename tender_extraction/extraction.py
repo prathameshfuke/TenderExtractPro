@@ -160,13 +160,26 @@ def extract_scope_of_work(
         logger.error("Scope extraction failed after retry.")
         return {"tasks": [], "exclusions": []}
 
-    scope = parsed.get("scope_of_work", {})
+    # parsed could be:
+    # {"scope_of_work": {"tasks": [...], "exclusions": [...]}}  <- correct
+    # {"tasks": [...], "exclusions": [...]}                     <- missing wrapper  
+    # {"scope_of_work": [...]}                                  <- wrong type
+    # [...]                                                     <- bare list
+    
+    if isinstance(parsed, list):
+        parsed = {"scope_of_work": {"tasks": parsed, "exclusions": []}}
+    
+    scope = parsed.get("scope_of_work", parsed)  # unwrap if nested
+    
+    if isinstance(scope, list):
+        scope = {"tasks": scope, "exclusions": []}
+    
     if not isinstance(scope, dict):
-        scope = {}
-        
+        scope = {"tasks": [], "exclusions": []}
+    
     return {
-        "tasks": scope.get("tasks", []) if isinstance(scope.get("tasks"), list) else [],
-        "exclusions": scope.get("exclusions", []) if isinstance(scope.get("exclusions"), list) else [],
+        "tasks": scope.get("tasks", []),
+        "exclusions": scope.get("exclusions", [])
     }
 
 
@@ -180,81 +193,45 @@ def extract_scope_of_work(
 def build_spec_prompt(context: str, topic: str = "") -> str:
     topic_hint = f"This tender is for: {topic}\n\n" if topic else ""
     return f"""<|system|>
-You are a JSON extraction API for procurement documents. You output ONLY valid JSON. No explanations, no markdown fences, no preamble. Start your response with {{ and end with }}.<|end|>
+You are a JSON API. Respond with ONLY a valid JSON object. No markdown. No explanation. No text before or after the JSON.<|end|>
 <|user|>
-{topic_hint}Extract ALL technical specifications from the tender text below. Focus on measurable requirements: dimensions, performance parameters, materials, standards, quantities.
+{topic_hint}Extract all technical specifications from the tender text below. Return a JSON object with key "technical_specifications" containing an array of specification objects.
+
+Each specification object must have these exact keys:
+- item_name: descriptive name of the component or parameter (string, min 5 chars)
+- specification_text: the full requirement as stated in the document (string, min 20 chars)  
+- unit: unit of measurement, or "NOT_FOUND"
+- numeric_value: numeric quantity, or "NOT_FOUND"
+- tolerance: tolerance value, or "NOT_FOUND"
+- standard_reference: standard code like IS/ASTM/ISO, or "NOT_FOUND"
+- material: material type, or "NOT_FOUND"
+- source: object with "page" (integer) and "exact_text" (verbatim short phrase from document)
+- confidence: "HIGH"
+
+IMPORTANT: Only extract specs actually present in the text. Never invent values.
 
 TENDER TEXT:
 {context}
-
-STRICT RULES:
-1. Only extract specs explicitly stated in the text
-2. Use "NOT_FOUND" only when a field truly does not exist — do NOT use it as a default
-3. item_name: the component or parameter name (min 4 chars, must be descriptive)
-4. specification_text: the actual requirement stated (min 20 chars)
-5. exact_text: copy a short verbatim phrase from the document proving this spec exists
-6. If you find NO specifications, return {{"technical_specifications": []}}
-
-JSON STRUCTURE:
-{{
-  "technical_specifications": [
-    {{
-      "item_name": "Magnetic Field Strength",
-      "specification_text": "Minimum 9 Tesla superconducting magnet with closed cycle cryogen-free operation",
-      "unit": "Tesla",
-      "numeric_value": "9",
-      "tolerance": "NOT_FOUND",
-      "standard_reference": "NOT_FOUND",
-      "material": "NOT_FOUND",
-      "source": {{
-        "page": 21,
-        "exact_text": "9 Tesla (minimum) superconducting magnet"
-      }},
-      "confidence": "HIGH"
-    }}
-  ]
-}}
 <|end|>
-<|assistant|>
-{{"""
+<|assistant|>"""
 
 
 def build_scope_prompt(context: str, topic: str = "") -> str:
     topic_hint = f"This tender is for: {topic}\n\n" if topic else ""
     return f"""<|system|>
-You are a JSON extraction API. Output ONLY valid JSON starting with {{ and ending with }}.<|end|>
+You are a JSON API. Respond with ONLY a valid JSON object. No markdown. No explanation.<|end|>
 <|user|>
-{topic_hint}Extract the scope of work from this tender text — what the contractor/supplier must do, supply, install, or is explicitly excluded from doing.
+{topic_hint}Extract the scope of work from this tender text. Return a JSON object with key "scope_of_work" containing "tasks" array and "exclusions" array.
+
+Each task: {{"task_description": "...", "responsible_party": "...", "timeline": "..."}}
+Each exclusion: {{"exclusion_description": "..."}}
+
+Use "NOT_FOUND" for missing sub-fields. Only extract content explicitly in the text.
 
 TENDER TEXT:
 {context}
-
-RULES:
-1. Tasks = actual work/supply activities required
-2. Exclusions = things explicitly stated as NOT included
-3. Ignore payment clauses, bid submission rules, legal text
-4. Use "NOT_FOUND" for missing sub-fields only
-
-JSON STRUCTURE:
-{{
-  "scope_of_work": {{
-    "tasks": [
-      {{
-        "task_description": "Supply and installation of superconducting magnet system",
-        "responsible_party": "Contractor",
-        "timeline": "NOT_FOUND"
-      }}
-    ],
-    "exclusions": [
-      {{
-        "exclusion_description": "Civil work not included"
-      }}
-    ]
-  }}
-}}
 <|end|>
-<|assistant|>
-{{"""
+<|assistant|>"""
 
 
 def _build_context(retrieved_chunks: List[Dict[str, Any]]) -> str:
@@ -306,50 +283,51 @@ def _call_llm(llm, prompt: str, progress_message: str = "LLM generating") -> str
 
 
 def _clean_and_parse_json(raw: str, root_key: str) -> dict:
-    """
-    Aggressively clean LLM output and parse JSON.
-    Handles: markdown fences, preamble text, truncation.
-    """
     text = raw.strip()
     
     # Strip markdown fences
     text = re.sub(r'```json\s*', '', text)
     text = re.sub(r'```\s*', '', text)
+    text = text.strip()
     
-    # Find JSON boundaries
-    first = text.find('{')
-    if first > 0:
-        text = text[first:]
+    # Find first { — strip any preamble before it
+    first_brace = text.find('{')
+    if first_brace > 0:
+        text = text[first_brace:]
     
-    # Fix truncated JSON by finding the last complete object
-    last = text.rfind('}')
-    if last != -1:
-        text = text[:last + 1]
+    # If no { found but starts with a key like "scope_of_work": wrap it
+    if not text.startswith('{'):
+        if text.startswith('"'):
+            text = '{' + text
     
-    # Attempt parse
+    # Strip trailing garbage after last valid }
+    last_brace = text.rfind('}')
+    if last_brace != -1:
+        text = text[:last_brace + 1]
+    
+    # Attempt 1: direct parse
     try:
-        data = json.loads(text)
-        if isinstance(data, list):
-            return {root_key: data}
-        if not isinstance(data, dict):
-            return {root_key: {}} if root_key == "scope_of_work" else {root_key: []}
-        return data
+        result = json.loads(text)
+        # Handle case where model returned the root_key value directly (a list)
+        if isinstance(result, list):
+            return {root_key: result}
+        return result
     except json.JSONDecodeError:
-        # Try to salvage partial JSON — close any open arrays/objects
-        open_braces = text.count('{') - text.count('}')
-        open_brackets = text.count('[') - text.count(']')
-        text = text + (']' * max(0, open_brackets)) + ('}' * max(0, open_braces))
-        try:
-            data = json.loads(text)
-            if isinstance(data, list):
-                return {root_key: data}
-            if not isinstance(data, dict):
-                return {root_key: {}} if root_key == "scope_of_work" else {root_key: []}
-            return data
-        except json.JSONDecodeError as e:
-            logger.error(f"JSON parse failed after salvage attempt: {e}")
-            logger.error(f"Raw output first 500 chars: {raw[:500]}")
-            return {root_key: {}} if root_key == "scope_of_work" else {root_key: []}
+        pass
+    
+    # Attempt 2: salvage truncated JSON by closing open structures
+    open_braces = text.count('{') - text.count('}')
+    open_brackets = text.count('[') - text.count(']')
+    text = text + (']' * max(0, open_brackets)) + ('}' * max(0, open_braces))
+    try:
+        result = json.loads(text)
+        if isinstance(result, list):
+            return {root_key: result}
+        return result
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parse failed after salvage: {e}")
+        logger.error(f"Raw output first 300 chars: {raw[:300]}")
+        return {root_key: [] if root_key != "scope_of_work" else {"tasks": [], "exclusions": []}}
 
 
 # ── Smoke test ────────────────────────────────────────────────────────────

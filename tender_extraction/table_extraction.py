@@ -168,7 +168,13 @@ def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     col_map = _map_columns(headers)
 
+    # For tables with correctly mapped spec columns, be MORE permissive
+    has_spec_columns = len(col_map) >= 2
+    is_spec_page = page >= 20  # Pages 20+ are more likely to have real specs
+
     specs: List[Dict[str, Any]] = []
+    skipped: List[str] = []
+    
     for row_idx, row in enumerate(rows):
         non_empty = [c for c in row if c.strip()]
         if len(non_empty) < 2:
@@ -204,21 +210,54 @@ def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
             # Concatenate everything after the item name as the spec text
             spec["specification_text"] = " ".join(non_empty[1:]) if len(non_empty) > 1 else non_empty[0]
 
-        # 1. item_name must be at least 5 characters and not purely numeric
         item_name_str = str(spec["item_name"]).strip()
-        if len(item_name_str) < 5 or item_name_str.replace('.', '', 1).isnumeric():
-            continue
-        if not any(c.isalpha() for c in item_name_str):
+        spec_text_str = str(spec["specification_text"]).strip()
+
+        # Skip clearly bad rows
+        if len(item_name_str) < 4 and len(spec_text_str) < 10:
+            skipped.append(f"both too short: '{item_name_str}' / '{spec_text_str[:30]}'")
             continue
 
-        # 2. specification_text must be at least 20 characters and contain an alphanumeric word of 3+ chars
-        spec_text_str = str(spec["specification_text"]).strip()
-        if len(spec_text_str) < 20 or not re.search(r'[a-zA-Z0-9]{3,}', spec_text_str):
-            continue
-        if spec_text_str == item_name_str:
-            continue  # duplicate — table had no real spec col
+        # For spec pages with good columns, use item_name OR spec_text alone
+        if has_spec_columns and is_spec_page:
+            # If spec_text is good even without item_name
+            if len(spec_text_str) >= 15 and any(c.isalpha() for c in spec_text_str):
+                if not item_name_str or item_name_str == "NOT_FOUND":
+                    item_name_str = spec_text_str[:50]  # use start of spec as name
+                    spec["item_name"] = item_name_str
+                
+                # proceed to build dict
+            else:
+                skipped.append(f"spec_page condition failed: '{item_name_str}' / '{spec_text_str[:30]}'")
+                continue
+        else:
+            # 1. item_name must be at least 5 characters and not purely numeric
+            if len(item_name_str) < 5:
+                skipped.append(f"item_name too short: '{item_name_str}'")
+                continue
+            if item_name_str.replace('.', '', 1).isnumeric():
+                skipped.append(f"item_name numeric: '{item_name_str}'")
+                continue
+            if not any(c.isalpha() for c in item_name_str):
+                skipped.append(f"item_name no alpha: '{item_name_str}'")
+                continue
+            
+            # 2. specification_text must be at least 20 characters and contain an alphanumeric word of 3+ chars
+            if len(spec_text_str) < 20:
+                skipped.append(f"spec_text too short: '{spec_text_str[:30]}'")
+                continue
+            if not re.search(r'[a-zA-Z0-9]{3,}', spec_text_str):
+                skipped.append(f"spec_text no alpha 3+: '{spec_text_str[:30]}'")
+                continue
+            if spec_text_str == item_name_str:
+                skipped.append(f"spec_text == item_name: '{item_name_str}'")
+                continue  # duplicate — table had no real spec col
 
         specs.append(spec)
+
+    # Log why specs were skipped on important pages
+    if page >= 20 and not specs and skipped:
+        logger.warning(f"Table on page {page} skipped {len(skipped)} rows: {skipped[:3]}")
 
     logger.info(
         "Parsed %d specs from %s (page %d, %d cols mapped: %s)",

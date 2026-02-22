@@ -143,7 +143,16 @@ def validate_extractions(
 
 def validate_schema(raw: Dict[str, Any]) -> ExtractionResult:
     """Pydantic validation — catches type mismatches and missing fields."""
-    return ExtractionResult.model_validate(raw)
+    try:
+        from pydantic import BaseModel
+        _pydantic_v2 = hasattr(BaseModel, 'model_validate')
+    except ImportError:
+        _pydantic_v2 = False
+
+    if _pydantic_v2:
+        return ExtractionResult.model_validate(raw)
+    else:
+        return ExtractionResult.parse_obj(raw)
 
 
 def _verify_task_grounding(
