@@ -232,15 +232,17 @@ def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
                 continue
         else:
             # 1. item_name must be at least 5 characters and not purely numeric
-            if len(item_name_str) < 5:
-                skipped.append(f"item_name too short: '{item_name_str}'")
-                continue
-            if item_name_str.replace('.', '', 1).isnumeric():
-                skipped.append(f"item_name numeric: '{item_name_str}'")
-                continue
-            if not any(c.isalpha() for c in item_name_str):
-                skipped.append(f"item_name no alpha: '{item_name_str}'")
-                continue
+            bad_item = (len(item_name_str) < 5 or 
+                        item_name_str.replace('.', '', 1).isnumeric() or 
+                        not any(c.isalpha() for c in item_name_str))
+                        
+            if bad_item:
+                if is_spec_page and len(spec_text_str) >= 15 and any(c.isalpha() for c in spec_text_str):
+                    item_name_str = spec_text_str[:50]
+                    spec["item_name"] = item_name_str
+                else:
+                    skipped.append(f"item_name bad: '{item_name_str}'")
+                    continue
             
             # 2. specification_text must be at least 20 characters and contain an alphanumeric word of 3+ chars
             if len(spec_text_str) < 20:
@@ -249,7 +251,9 @@ def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
             if not re.search(r'[a-zA-Z0-9]{3,}', spec_text_str):
                 skipped.append(f"spec_text no alpha 3+: '{spec_text_str[:30]}'")
                 continue
-            if spec_text_str == item_name_str:
+            if spec_text_str == item_name_str and bad_item and is_spec_page:
+                pass # fine if item_name was rescued from spec_text
+            elif spec_text_str == item_name_str:
                 skipped.append(f"spec_text == item_name: '{item_name_str}'")
                 continue  # duplicate — table had no real spec col
 
@@ -356,9 +360,9 @@ if __name__ == "__main__":
     from pathlib import Path
     logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
-    pdf = "dataset/Tenderdocuments.pdf"
+    pdf = sys.argv[1] if len(sys.argv) > 1 else "dataset/globaltender1576.pdf"
     if not Path(pdf).exists():
-        pdf = "dataset/globaltender1576.pdf"
+        pdf = "dataset/Tenderdocuments.pdf"
     if not Path(pdf).exists():
         print("No dataset PDFs found.")
         sys.exit(1)
