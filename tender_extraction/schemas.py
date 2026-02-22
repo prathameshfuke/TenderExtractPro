@@ -1,18 +1,13 @@
 """
 schemas.py — Pydantic v2 models with strict validation.
 
-These models define the extraction contract. Every field has a type,
-every optional field defaults to "NOT_FOUND", and there's a field_validator
-that rejects empty specification_text (the most common LLM failure mode).
-
-We moved to Pydantic v2 because model_validate() is ~3x faster than v1's
-parse_obj(), which matters when validating 200+ specs per document.
-- Prathamesh, 2026-02-12
+These models define the extraction contract. Fields map exactly
+to expected extraction outputs with appropriate defaults.
 """
 
 from __future__ import annotations
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, validator
 
 
 class SourceCitation(BaseModel):
@@ -37,7 +32,7 @@ class TechnicalSpecification(BaseModel):
     source: SourceCitation
     confidence: Literal["HIGH", "MEDIUM", "LOW"] = Field(default="LOW")
 
-    @field_validator("specification_text")
+    @validator("specification_text")
     @classmethod
     def spec_text_must_not_be_empty(cls, v: str) -> str:
         if not v or not v.strip():
@@ -70,6 +65,7 @@ class ExtractionResult(BaseModel):
     """Top-level output of the entire pipeline."""
     technical_specifications: List[TechnicalSpecification] = Field(default_factory=list)
     scope_of_work: ScopeOfWork = Field(default_factory=ScopeOfWork)
+    accuracy_score: float = Field(default=0.0, description="Overall accuracy/grounding score percentage (0-100)")
 
 
 # Internal models used within the pipeline
@@ -129,10 +125,12 @@ if __name__ == "__main__":
                 source=SourceCitation(chunk_id="c2", page=8),
             )],
         ),
+        accuracy_score=95.5,
     )
-    data = result.model_dump()
+    data = result.dict()
     assert len(data["technical_specifications"]) == 1
     assert data["scope_of_work"]["tasks"][0]["timeline"] == "NOT_FOUND"
+    assert data["accuracy_score"] == 95.5
     print("Test 3 passed: full ExtractionResult round-trip")
 
     print("\nAll schema tests passed.")

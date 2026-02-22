@@ -1,27 +1,12 @@
 """
 chunking.py — Hierarchical chunking with rich metadata.
 
-The chunking strategy can make or break extraction quality. We tried three
-approaches before landing on this one:
+Implements section-aware paragraph chunking where each chunk 
+retains its section, parent section, and type (table/paragraph/list).
+This preserves context for the LLM.
 
-  1. Fixed-size sliding window (400 tokens, 100 overlap): Simple but terrible.
-     Section headers got split from their content. A spec that said "Steel: 
-     see section 3.2 for details" ended up in a different chunk from section 3.2.
-
-  2. Recursive text splitting (like LangChain): Better, but lost all section
-     hierarchy. Every chunk was an orphan with no context about where in the
-     document it came from.
-
-  3. Current approach — section-aware paragraph chunking: Each chunk knows its
-     section, parent section, and type (table/paragraph/list/image_ocr). This
-     lets the LLM understand context even when looking at a single chunk.
-
-The most important rule: tables are NEVER chunked as text. Each table row
-becomes its own chunk with headers repeated. This preserves column-value
-relationships. If you chunk a table as text, "500 kg" might end up in a
-different chunk from "Steel Bars" and the LLM will happily assign that
-quantity to concrete instead.
-- Prathamesh, 2026-02-12
+Tables are never chunked as text. Each table row becomes its own chunk
+with headers repeated to preserve column-value relationships.
 """
 
 from __future__ import annotations

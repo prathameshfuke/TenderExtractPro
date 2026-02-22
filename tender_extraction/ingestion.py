@@ -1,18 +1,10 @@
 """
 ingestion.py — Multi-format document loading with OCR fallback.
 
-This module handles the messiest part of the pipeline: getting clean text
-out of whatever file format the user throws at us. Government tenders come
-in every imaginable state — text PDFs, scanned PDFs at weird angles,
-password-protected docs (we reject those), photos of printed pages, etc.
-
-The character-density heuristic for detecting scanned pages was calibrated
-against 23 real tenders from NHAI, CPWD, and state PWD offices. Threshold
-of 50 chars/page correctly classified 22/23 — the one miss was a cover page
-with a large watermark that pdfplumber extracted as garbage chars. We could
-make it smarter but the cost of misclassifying a text page as scanned is
-just a slower (but still correct) OCR pass, so it's not worth over-engineering.
-- Prathamesh, 2026-02-10
+Handles document parsing across various file formats. Uses
+pdfplumber for standard PDFs and falls back to pdf2image + pytesseract 
+for scanned components. Employs a character-density heuristic to 
+detect scanned pages automatically.
 """
 
 from __future__ import annotations

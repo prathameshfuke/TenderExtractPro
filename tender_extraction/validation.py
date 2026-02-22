@@ -1,22 +1,11 @@
 """
 validation.py — Grounding verification using rapidfuzz.
 
-After the LLM extracts specs, we verify each one is actually grounded in the
-source document. The idea: if the LLM says it found "Steel Grade 60 per 
-ASTM A615" on page 15, we look at the actual text from page 15 and check
-that text really exists there.
+Verifies each extraction is grounded in the source document by performing
+fuzzy substring matching against the original chunk text.
 
-We use rapidfuzz.fuzz.partial_ratio instead of difflib.SequenceMatcher
-because it's 10-50x faster (C++ backend) and handles substring matching
-better for our use case — the LLM's "exact_text" citation is often a 
-substring of the full chunk text, not the whole thing.
-
-Confidence thresholds calibrated on 50 manually-verified extractions:
-  >= 0.90 -> HIGH (exact or near-exact match)
-  >= 0.60 -> MEDIUM (paraphrased, or OCR character errors)
-  <  0.60 -> LOW (uncertain, needs manual review)
-  <  0.40 -> REJECTED (likely hallucination, dropped with warning)
-- Prathamesh, 2026-02-18
+Confidence thresholds map matching scores to HIGH, MEDIUM, and LOW, 
+rejecting extractions that fall below the minimum threshold.
 """
 
 from __future__ import annotations
@@ -86,11 +75,14 @@ def validate_extractions(
     raw_specs = extraction.get("technical_specifications", [])
     validated_specs: List[Dict[str, Any]] = []
 
+    total_score = 0.0
+    accepted_count = 0
+
     for spec in raw_specs:
         score = verify_grounding(spec, source_chunks)
         confidence = assign_confidence(score)
 
-        if score < config.validation.min_grounding_ratio:
+        if score < config.validation.min_grounding_ratio - 1e-9:
             logger.warning(
                 "REJECTED spec '%s' (grounding=%.2f < threshold=%.2f). "
                 "Likely hallucination.",
@@ -98,6 +90,8 @@ def validate_extractions(
             )
             continue
 
+        total_score += score
+        accepted_count += 1
         spec["confidence"] = confidence
         spec = _enforce_not_found(spec)
         validated_specs.append(spec)
@@ -107,12 +101,14 @@ def validate_extractions(
     validated_tasks: List[Dict[str, Any]] = []
     for task in scope.get("tasks", []):
         task_score = _verify_task_grounding(task, source_chunks)
-        if task_score < config.validation.min_grounding_ratio:
+        if task_score < config.validation.min_grounding_ratio - 1e-9:
             logger.warning(
                 "REJECTED task '%s' (grounding=%.2f)",
                 task.get("task_description", "?")[:60], task_score,
             )
             continue
+        total_score += task_score
+        accepted_count += 1
         task = _enforce_not_found(task)
         validated_tasks.append(task)
 
@@ -133,12 +129,15 @@ def validate_extractions(
         specs_rejected + tasks_rejected,
     )
 
+    overall_accuracy = (total_score / accepted_count) if accepted_count > 0 else 0.0
+
     return {
         "technical_specifications": validated_specs,
         "scope_of_work": {
             "tasks": validated_tasks,
             "exclusions": validated_exclusions,
         },
+        "accuracy_score": round(overall_accuracy * 100, 2),
     }
 
 

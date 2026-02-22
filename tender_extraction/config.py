@@ -1,15 +1,8 @@
 """
 config.py — Central configuration for TenderExtractPro.
 
-All tunable params live here so we're not hunting through 10 files when
-something needs changing.  In production, most of these get overridden
-by environment variables (loaded from Kubernetes ConfigMaps on our
-staging/prod clusters).
-
-Originally we had config spread across each module. After the third time
-someone changed a threshold in validation.py but forgot to update the
-matching one in extraction.py, we centralised everything here.
-- Prathamesh, 2026-02-10
+All tunable parameters are defined here. In production, 
+these can be overridden by environment variables or configuration files.
 """
 
 from dataclasses import dataclass, field
@@ -103,15 +96,13 @@ class LLMConfig:
     """
     model_path: str = os.getenv(
         "LLM_MODEL_PATH",
-        "models/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
+        "models/Phi-3-mini-4k-instruct-q4.gguf",
     )
-    n_ctx: int = 8192
-    max_tokens: int = 4096
-    # Low temperature for deterministic extraction. We tried 0.0 but
-    # llama.cpp treats 0.0 as greedy which occasionally gets stuck in
-    # repetition loops. 0.1 avoids that.
+    n_ctx: int = 4096
+    n_threads: Optional[int] = 4
+    n_gpu_layers: int = -1
+    max_tokens: int = 2048
     temperature: float = 0.1
-    n_threads: int = 0  # 0 = auto-detect, usually picks all cores
     max_retries: int = 3
     retry_base_delay: float = 2.0
 

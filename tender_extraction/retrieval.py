@@ -1,19 +1,12 @@
 """
 retrieval.py — Hybrid BM25 + FAISS retrieval with disk persistence.
 
-This is the core RAG module. It builds two indexes:
-  1. BM25Okapi for keyword-level matching (catches standard codes like "IS 456")
-  2. FAISS IndexFlatIP for semantic similarity (catches "rebar" = "steel bars")
+This module builds two indexes:
+  1. BM25Okapi for keyword-level matching
+  2. FAISS IndexFlatIP for semantic similarity
 
-Both indexes are persisted to disk so we don't rebuild them every time.
-The BM25 index is pickled, FAISS uses its native write_index/read_index.
-
-Score fusion: 0.4 * BM25_normalized + 0.6 * FAISS_cosine. The 0.6 embedding
-weight was tuned on 100 manually-labeled queries against 5 tenders. Pure BM25
-gave MRR@10 of 0.71, pure embeddings 0.74, hybrid 0.82. The semantic side
-gets more weight because tender queries are usually natural language, not
-keyword searches. But BM25 is essential for exact standard codes.
-- Prathamesh, 2026-02-18
+Both indexes are persisted to disk to avoid rebuilding them.
+Score fusion uses weighted min-max normalization.
 """
 
 from __future__ import annotations
@@ -159,6 +152,15 @@ class HybridRetriever:
             len(results), query[:40], results[0]["score"] if results else 0.0,
         )
         return results
+
+    def retrieve_spec_chunks(self, query: str, top_k: int = 15, prefer_pages_after: int = 15) -> List[Dict[str, Any]]:
+        chunks = self.retrieve(query, top_k=top_k * 2)
+        # Boost chunks from later pages where specs usually live
+        for r in chunks:
+            if r["chunk"].metadata.page > prefer_pages_after:
+                r["score"] *= 1.2
+        chunks.sort(key=lambda x: x["score"], reverse=True)
+        return chunks[:top_k]
 
     def save(self, directory: str) -> None:
         """Persist indexes and chunks to disk."""

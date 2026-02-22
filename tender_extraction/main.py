@@ -1,21 +1,15 @@
 """
 main.py — End-to-end pipeline orchestration.
 
-Runs all 6 stages in sequence on a real document, producing a real JSON
-output file. NO mock results, NO placeholder stages, NO dummy data.
+Runs the system in a 6-stage sequence:
+  1. Ingestion
+  2. Table extraction
+  3. Chunking
+  4. Retrieval
+  5. LLM Extraction
+  6. Validation
 
-Stages:
-  1. Ingestion — pdfplumber + OCR fallback
-  2. Table extraction — pdfplumber with dual strategy
-  3. Chunking — section-aware, table-row preservation
-  4. Retrieval — BM25 + FAISS hybrid index
-  5. LLM Extraction — Mistral-7B via llama-cpp-python
-  6. Validation — rapidfuzz grounding + confidence scoring
-
-If the LLM model isn't downloaded, stage 5 will raise RuntimeError
-with download instructions. This is by design — we fail loud and clear
-instead of silently returning garbage.
-- Prathamesh, 2026-02-22
+Produces structured XML/JSON output.
 """
 
 from __future__ import annotations
@@ -26,6 +20,7 @@ import logging
 import os
 import sys
 import time
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -38,6 +33,50 @@ from tender_extraction.extraction import extract_specifications, extract_scope_o
 from tender_extraction.validation import validate_extractions, validate_schema
 
 logger = logging.getLogger("tender_extraction")
+
+
+def discover_document_topic(pages: list[dict]) -> str:
+    """
+    Read pages 1-5 to find the tender subject.
+    Returns a topic string for targeted retrieval.
+    """
+    early_text = " ".join(p["text"] for p in pages[:5])
+    # Extract the subject line — look for patterns like "for Procurement of X"
+    patterns = [
+        r"(?:procurement|supply|purchase|tender for)[^\n]{0,200}",
+        r"(?:name of work|subject)[:\s]+([^\n]{10,150})",
+        r"CHAPTER[\s\-]+\d+[^\n]*\n([^\n]{20,200})"
+    ]
+    for pat in patterns:
+        m = re.search(pat, early_text, re.IGNORECASE)
+        if m:
+            return m.group(0)[:200]
+    return early_text[:300]
+
+
+def build_targeted_queries(topic: str) -> list[str]:
+    """Build retrieval queries specific to what this tender is actually about."""
+    return [
+        topic,                                    # exact topic
+        f"{topic} technical specifications",
+        f"{topic} requirements performance",
+        f"{topic} minimum maximum parameters",
+        "schedule of requirements specifications technical details",
+        "chapter 4 specifications",               # common tender section name
+        "scope of supply deliverables",
+        "warranty maintenance period",
+        "compliance statement specifications",
+    ]
+
+
+def _progress(step: int, total: int, label: str, detail: str = ""):
+    bar_len = 30
+    filled = int(bar_len * step / total)
+    bar = "█" * filled + "░" * (bar_len - filled)
+    pct = int(100 * step / total)
+    print(f"\r  [{bar}] {pct:3d}%  Step {step}/{total}: {label}"
+          + (f" — {detail}" if detail else ""), 
+          end="" if step < total else "\n", flush=True)
 
 
 class TenderExtractionPipeline:
@@ -70,6 +109,7 @@ class TenderExtractionPipeline:
 
         # -- Stage 1: Ingestion ------------------------------------------------
         t0 = time.time()
+        _progress(1, 6, "Ingesting document...")
         logger.info("[1/6] Ingesting document ...")
         pages = ingest_document(file_path)
         logger.info(
@@ -82,6 +122,7 @@ class TenderExtractionPipeline:
 
         # -- Stage 2: Table Extraction -----------------------------------------
         t0 = time.time()
+        _progress(2, 6, "Extracting tables...")
         logger.info("[2/6] Extracting tables ...")
         tables = []
         table_specs = []
@@ -96,6 +137,7 @@ class TenderExtractionPipeline:
 
         # -- Stage 3: Chunking -------------------------------------------------
         t0 = time.time()
+        _progress(3, 6, "Creating chunks...")
         logger.info("[3/6] Creating chunks ...")
         chunks = create_chunks(pages, tables)
         logger.info("  Created: %d chunks in %.1fs", len(chunks), time.time() - t0)
@@ -106,19 +148,13 @@ class TenderExtractionPipeline:
 
         # -- Stage 4: Retrieval ------------------------------------------------
         t0 = time.time()
+        _progress(4, 6, "Building retrieval index + querying...")
         logger.info("[4/6] Building retrieval index + querying ...")
         self._retriever = HybridRetriever()
         self._retriever.build_index(chunks)
 
-        # Multiple query phrasings per extraction type.
-        # Each phrasing catches different aspects via BM25 keyword matching.
-        spec_queries = [
-            "technical specifications requirements standards",
-            "material specifications grade quality",
-            "dimensions measurements tolerances",
-            "equipment machinery specifications capacity",
-            "bill of quantities item description rate unit",
-        ]
+        topic = discover_document_topic(pages)
+        spec_queries = build_targeted_queries(topic)
         scope_queries = [
             "scope of work tasks deliverables",
             "project timeline schedule milestones completion",
@@ -126,7 +162,7 @@ class TenderExtractionPipeline:
             "contractor responsibilities obligations",
         ]
 
-        spec_chunks = self._multi_query_retrieve(spec_queries, top_k=15)
+        spec_chunks = self._multi_query_retrieve(spec_queries, top_k=15, is_spec=True)
         scope_chunks = self._multi_query_retrieve(scope_queries, top_k=10)
         logger.info(
             "  Retrieved: %d spec chunks, %d scope chunks in %.1fs",
@@ -135,10 +171,11 @@ class TenderExtractionPipeline:
 
         # -- Stage 5: LLM Extraction ------------------------------------------
         t0 = time.time()
+        _progress(5, 6, "Running LLM extraction (1-3m)...")
         logger.info("[5/6] Running LLM extraction ...")
 
-        llm_specs = extract_specifications(spec_chunks)
-        llm_scope = extract_scope_of_work(scope_chunks)
+        llm_specs = extract_specifications(spec_chunks, topic=topic)
+        llm_scope = extract_scope_of_work(scope_chunks, topic=topic)
 
         # Table-extracted specs come first because they're more reliable
         # (structured column mapping vs. LLM generation)
@@ -151,6 +188,7 @@ class TenderExtractionPipeline:
 
         # -- Stage 6: Validation -----------------------------------------------
         t0 = time.time()
+        _progress(6, 6, "Validating and grounding extractions...")
         logger.info("[6/6] Validating and grounding ...")
 
         raw_result = {
@@ -164,7 +202,7 @@ class TenderExtractionPipeline:
         # Pydantic schema enforcement
         try:
             result_model = validate_schema(validated)
-            final_result = result_model.model_dump()
+            final_result = result_model.dict()
         except Exception as exc:
             logger.warning("Pydantic validation issue: %s. Using raw result.", exc)
             final_result = validated
@@ -176,12 +214,14 @@ class TenderExtractionPipeline:
         n_specs = len(final_result.get("technical_specifications", []))
         n_tasks = len(final_result.get("scope_of_work", {}).get("tasks", []))
         n_excl = len(final_result.get("scope_of_work", {}).get("exclusions", []))
+        acc_score = final_result.get("accuracy_score", 0.0)
 
         logger.info("=" * 60)
         logger.info("DONE in %.1fs", elapsed)
         logger.info("  Specs:      %d", n_specs)
         logger.info("  Tasks:      %d", n_tasks)
         logger.info("  Exclusions: %d", n_excl)
+        logger.info("  Accuracy:   %.2f%%", acc_score)
         logger.info("=" * 60)
 
         # Write output
@@ -197,6 +237,7 @@ class TenderExtractionPipeline:
         self,
         queries: List[str],
         top_k: int = 10,
+        is_spec: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Run multiple retrieval queries and deduplicate by chunk_id.
@@ -206,7 +247,10 @@ class TenderExtractionPipeline:
         results = []
 
         for query in queries:
-            hits = self._retriever.retrieve(query, top_k=top_k)
+            if is_spec:
+                hits = self._retriever.retrieve_spec_chunks(query, top_k=top_k)
+            else:
+                hits = self._retriever.retrieve(query, top_k=top_k)
             for hit in hits:
                 cid = hit["chunk"].chunk_id
                 if cid not in seen_ids:
@@ -222,6 +266,7 @@ def _empty_result(output_path: Optional[str] = None) -> Dict[str, Any]:
     result = {
         "technical_specifications": [],
         "scope_of_work": {"tasks": [], "exclusions": []},
+        "accuracy_score": 0.0,
     }
     if output_path:
         os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)

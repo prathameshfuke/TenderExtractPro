@@ -1,26 +1,11 @@
 """
 table_extraction.py — Dedicated table extraction pipeline.
 
-This is arguably the most important module in the whole system. After
-analysing 50+ real government tenders, we found that 70-80% of technical
-specifications live inside tables. If you treat tables as plain text and
-chunk them, you lose the column-value relationships and the LLM hallucinates
-connections that don't exist (e.g. assigning Unit from row 3 to Item from
-row 7).
+Extracts tables separately to preserve their structure and feed
+them to the pipeline as structured data rather than text chunks.
 
-The approach: extract tables separately, preserve their structure, and feed
-them to the LLM as structured data — NOT as text chunks for semantic search.
-
-We chose pdfplumber over camelot/tabula because:
-  - camelot needs Ghostscript (extra system dep) and choked on the
-    RFPPBMCJob290 tender with complex nested tables
-  - tabula-py needs Java and was 3x slower on our benchmarks
-  - pdfplumber handles merged cells better out of the box and is pure Python
-
-One known limitation: pdfplumber struggles with borderless tables. We
-compensate by trying two strategies (line-based then text-based) and
-picking the one that finds more tables.
-- Prathamesh, 2026-02-11
+Uses pdfplumber, applying line-based and text-based extraction
+strategies to handle both bordered and borderless tables.
 """
 
 from __future__ import annotations
@@ -154,6 +139,8 @@ def extract_tables(pdf_path: str) -> List[Dict[str, Any]]:
     return tables_out
 
 
+SPEC_TABLE_MIN_PAGE = 15  # Skip tables before this page — they're admin/legal
+
 def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Convert a structured table into a list of specification dicts.
@@ -164,6 +151,13 @@ def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
     the first column as item_name and concatenating the rest as
     specification_text. Not perfect, but better than losing the data.
     """
+    # Skip admin tables entirely
+    if table.get("page", 0) < SPEC_TABLE_MIN_PAGE:
+        if not any(kw in " ".join(str(h) for h in table.get("headers", [])).lower() 
+                   for kw in ["specification", "technical", "parameter", "requirement", 
+                               "material", "grade", "tolerance", "standard"]):
+            return []
+
     headers = table.get("headers", [])
     rows = table.get("rows", [])
     table_id = table.get("table_id", "unknown")
@@ -209,6 +203,20 @@ def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
         if not spec["specification_text"] or spec["specification_text"] == "NOT_FOUND":
             # Concatenate everything after the item name as the spec text
             spec["specification_text"] = " ".join(non_empty[1:]) if len(non_empty) > 1 else non_empty[0]
+
+        # 1. item_name must be at least 5 characters and not purely numeric
+        item_name_str = str(spec["item_name"]).strip()
+        if len(item_name_str) < 5 or item_name_str.replace('.', '', 1).isnumeric():
+            continue
+        if not any(c.isalpha() for c in item_name_str):
+            continue
+
+        # 2. specification_text must be at least 20 characters and contain an alphanumeric word of 3+ chars
+        spec_text_str = str(spec["specification_text"]).strip()
+        if len(spec_text_str) < 20 or not re.search(r'[a-zA-Z0-9]{3,}', spec_text_str):
+            continue
+        if spec_text_str == item_name_str:
+            continue  # duplicate — table had no real spec col
 
         specs.append(spec)
 

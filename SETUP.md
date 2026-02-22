@@ -58,12 +58,12 @@ sudo apt-get install poppler-utils
 
 ## Step 5: Download the LLM Model
 
-The pipeline uses Mistral-7B-Instruct-v0.2 quantized to Q4_K_M (approximately 4 GB).
+The pipeline uses Phi-3-mini-4k-instruct quantized to Q4 GGUF (approximately 2.4 GB).
 
 Download from HuggingFace:
 
 ```
-https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf
+https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf
 ```
 
 Place the file in the `models/` directory:
@@ -72,14 +72,14 @@ Place the file in the `models/` directory:
 mkdir models
 # Download the file into models/
 # e.g., using curl:
-curl -L -o models/mistral-7b-instruct-v0.2.Q4_K_M.gguf \
-  "https://huggingface.co/TheBloke/Mistral-7B-Instruct-v0.2-GGUF/resolve/main/mistral-7b-instruct-v0.2.Q4_K_M.gguf"
+curl -L -o models/Phi-3-mini-4k-instruct-q4.gguf \
+  "https://huggingface.co/microsoft/Phi-3-mini-4k-instruct-gguf/resolve/main/Phi-3-mini-4k-instruct-q4.gguf"
 ```
 
 Or set the path via environment variable:
 
 ```bash
-set LLM_MODEL_PATH=D:\path\to\mistral-7b-instruct-v0.2.Q4_K_M.gguf
+set LLM_MODEL_PATH=D:\path\to\Phi-3-mini-4k-instruct-q4.gguf
 ```
 
 ## Step 6: Verify Installation
@@ -117,6 +117,6 @@ python -m json.tool out.json | head -80
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_MODEL_PATH` | `models/mistral-7b-instruct-v0.2.Q4_K_M.gguf` | Path to the GGUF model file |
+| `LLM_MODEL_PATH` | `models/Phi-3-mini-4k-instruct-q4.gguf` | Path to the GGUF model file |
 | `TESSERACT_CMD` | `tesseract` | Path to Tesseract OCR binary |
 | `LOG_LEVEL` | `INFO` | Logging level (DEBUG, INFO, WARNING, ERROR) |
