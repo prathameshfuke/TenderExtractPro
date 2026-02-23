@@ -58,14 +58,16 @@ def build_targeted_queries(topic: str) -> list[str]:
     """Build retrieval queries specific to what this tender is actually about."""
     return [
         topic,                                    # exact topic
-        f"{topic} technical specifications",
-        f"{topic} requirements performance",
-        f"{topic} minimum maximum parameters",
-        "schedule of requirements specifications technical details",
-        "chapter 4 specifications",               # common tender section name
-        "scope of supply deliverables",
+        f"{topic} technical specifications parameters",
+        f"{topic} requirements performance dimensions components",
+        f"{topic} minimum maximum operating parameters",
+        "schedule of requirements specification technical details features",
+        "chapter 4 specifications detailed specs",
+        "supply deliverables system requirements",
         "warranty maintenance period",
         "compliance statement specifications",
+        # Aggressive expansion for scientific/engineering equipment params
+        "materials construction tolerance unit measurement operating limits minimum magnetic requirement",
     ]
 
 
@@ -156,14 +158,16 @@ class TenderExtractionPipeline:
         topic = discover_document_topic(pages)
         spec_queries = build_targeted_queries(topic)
         scope_queries = [
-            "scope of work tasks deliverables",
-            "project timeline schedule milestones completion",
-            "exclusions not included out of scope",
-            "contractor responsibilities obligations",
+            "scope of work tasks deliverables responsibilities obligations",
+            "project timeline schedule completion delivery timeline milestones",
+            "exclusions not included out of scope boundary limits vendor excluded",
+            "contractor requirements obligations supply detailed tasks breakdown",
         ]
 
-        spec_chunks = self._multi_query_retrieve(spec_queries, top_k=15, is_spec=True)
-        scope_chunks = self._multi_query_retrieve(scope_queries, top_k=10)
+        # Drastically increase top_k to give the LLM the maximum context window
+        # possible to locate the missing superconducting magnet table text
+        spec_chunks = self._multi_query_retrieve(spec_queries, top_k=30, is_spec=True)
+        scope_chunks = self._multi_query_retrieve(scope_queries, top_k=15)
         logger.info(
             "  Retrieved: %d spec chunks, %d scope chunks in %.1fs",
             len(spec_chunks), len(scope_chunks), time.time() - t0,
