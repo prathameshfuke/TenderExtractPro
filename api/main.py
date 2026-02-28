@@ -46,7 +46,7 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
         
         update(5,  "Ingesting document pages...")
         update(20, "Extracting tables...")
-        update(35, "Building BM25 + FAISS index...")
+        update(35, "Building ChromaDB + BM25 hybrid index...")
         update(50, "Running hybrid retrieval...")
         update(65, "Phi-3 extracting specifications (this takes 1-3 min)...")
         

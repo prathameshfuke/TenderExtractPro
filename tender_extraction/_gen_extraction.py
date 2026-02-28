@@ -1,52 +1,132 @@
-"""
-extraction.py -- Real LLM-powered extraction via llama-cpp-python.
+"""Script to generate extraction.py with proper multi-line prompt strings."""
+import os
 
-Anti-hallucination strategy:
-  - Chain-of-thought prompting (reason first, then format)
-  - Few-shot examples in prompts (concrete input->output)
-  - Explicit NOT_FOUND for missing fields
-  - Source citations required for every extraction
-  - Low temperature (0.05) + top_p + repeat_penalty for determinism
-"""
+OUTPATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extraction.py")
 
-from __future__ import annotations
+# ---- Build prompt constants as Python-safe strings ----
 
-import json
-import logging
-import re
-import time
-import threading
-import sys
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+SYS_TAG_OPEN = "<" + "|system|" + ">"
+SYS_TAG_CLOSE = "<" + "|end|" + ">"
+USER_TAG_OPEN = "<" + "|user|" + ">"
+USER_TAG_CLOSE = "<" + "|end|" + ">"
+ASST_TAG_OPEN = "<" + "|assistant|" + ">"
+END_TAG = "<" + "/s" + ">"
 
-from rapidfuzz import fuzz
+FEW_SHOT_EXAMPLE = (
+    'EXAMPLE INPUT:\n'
+    '"Steel reinforcement bars shall be Grade 60 conforming to ASTM A615. '
+    'Minimum yield strength 420 MPa. Tolerance +/- 2%."\n\n'
+    'EXAMPLE OUTPUT:\n'
+    '{"technical_specifications": [{"item_name": "Steel Reinforcement Bars", '
+    '"specification_text": "Steel reinforcement bars shall be Grade 60 conforming to ASTM A615. '
+    'Minimum yield strength 420 MPa.", '
+    '"unit": "MPa", "numeric_value": "420", "tolerance": "+/- 2%", '
+    '"standard_reference": "ASTM A615", "material": "Steel Grade 60", '
+    '"source": {"page": 15, "exact_text": "Steel reinforcement bars shall be Grade 60"}, '
+    '"confidence": "HIGH"}]}'
+)
 
-from tender_extraction.config import config
-from tender_extraction.schemas import Chunk
+SPEC_SYSTEM = (
+    "You are a precise JSON extraction API for tender documents. "
+    "You MUST respond with ONLY a valid JSON object. "
+    "No markdown. No explanation. No text before or after the JSON.\n"
+    "CRITICAL RULES:\n"
+    "1. NEVER invent, assume, or calculate values\n"
+    "2. ONLY extract what is EXPLICITLY written in the provided text\n"
+    '3. Use "NOT_FOUND" for ANY field not explicitly stated in the text\n'
+    "4. Copy exact phrases from the document for specification_text and source.exact_text"
+)
 
-logger = logging.getLogger(__name__)
+SPEC_INSTRUCTIONS = (
+    "First, carefully read ALL the tender text chunks below. "
+    "Then, identify every technical specification mentioned. "
+    "Finally, format them as a JSON object.\n\n"
+    "{few_shot}\n\n"
+    'Now extract ALL technical specifications from this tender text. '
+    'Return a JSON object with key "technical_specifications" containing an array.\n\n'
+    "Each specification object must have these exact keys:\n"
+    "- item_name: descriptive name of the component or parameter (string, min 5 chars)\n"
+    "- specification_text: the full requirement as stated in the document (string, min 20 chars, copy verbatim)\n"
+    '- unit: unit of measurement, or "NOT_FOUND"\n'
+    '- numeric_value: numeric quantity as string, or "NOT_FOUND"\n'
+    '- tolerance: tolerance value, or "NOT_FOUND"\n'
+    '- standard_reference: standard code like IS/ASTM/ISO, or "NOT_FOUND"\n'
+    '- material: material type, or "NOT_FOUND"\n'
+    '- source: object with "page" (integer) and "exact_text" (short verbatim phrase from document)\n'
+    '- confidence: "HIGH"\n\n'
+    "IMPORTANT: If a value like unit, tolerance, or material is NOT explicitly written "
+    'in the text, you MUST use "NOT_FOUND". Do NOT guess or infer.\n\n'
+    "TENDER TEXT:\n{context}"
+)
 
-_llm_instance = None
+SCOPE_SYSTEM = (
+    "You are a precise JSON extraction API. "
+    "Respond with ONLY a valid JSON object. No markdown. No explanation."
+)
 
-# Chat template tags for Phi-3
-_SYS_OPEN = "<|system|>"
-_TAG_END = "<|end|>"
-_USER_OPEN = "<|user|>"
-_ASST_OPEN = "<|assistant|>"
-_EOS = "</s>"
-
-_SPEC_SYSTEM = 'You are a precise JSON extraction API for tender documents. You MUST respond with ONLY a valid JSON object. No markdown. No explanation. No text before or after the JSON.\nCRITICAL RULES:\n1. NEVER invent, assume, or calculate values\n2. ONLY extract what is EXPLICITLY written in the provided text\n3. Use "NOT_FOUND" for ANY field not explicitly stated in the text\n4. Copy exact phrases from the document for specification_text and source.exact_text'
-
-_SPEC_FEW_SHOT = 'EXAMPLE INPUT:\n"Steel reinforcement bars shall be Grade 60 conforming to ASTM A615. Minimum yield strength 420 MPa. Tolerance +/- 2%."\n\nEXAMPLE OUTPUT:\n{"technical_specifications": [{"item_name": "Steel Reinforcement Bars", "specification_text": "Steel reinforcement bars shall be Grade 60 conforming to ASTM A615. Minimum yield strength 420 MPa.", "unit": "MPa", "numeric_value": "420", "tolerance": "+/- 2%", "standard_reference": "ASTM A615", "material": "Steel Grade 60", "source": {"page": 15, "exact_text": "Steel reinforcement bars shall be Grade 60"}, "confidence": "HIGH"}]}'
-
-_SPEC_INSTRUCTIONS = 'First, carefully read ALL the tender text chunks below. Then, identify every technical specification mentioned. Finally, format them as a JSON object.\n\n{few_shot}\n\nNow extract ALL technical specifications from this tender text. Return a JSON object with key "technical_specifications" containing an array.\n\nEach specification object must have these exact keys:\n- item_name: descriptive name of the component or parameter (string, min 5 chars)\n- specification_text: the full requirement as stated in the document (string, min 20 chars, copy verbatim)\n- unit: unit of measurement, or "NOT_FOUND"\n- numeric_value: numeric quantity as string, or "NOT_FOUND"\n- tolerance: tolerance value, or "NOT_FOUND"\n- standard_reference: standard code like IS/ASTM/ISO, or "NOT_FOUND"\n- material: material type, or "NOT_FOUND"\n- source: object with "page" (integer) and "exact_text" (short verbatim phrase from document)\n- confidence: "HIGH"\n\nIMPORTANT: If a value like unit, tolerance, or material is NOT explicitly written in the text, you MUST use "NOT_FOUND". Do NOT guess or infer.\n\nTENDER TEXT:\n{context}'
-
-_SCOPE_SYSTEM = 'You are a precise JSON extraction API. Respond with ONLY a valid JSON object. No markdown. No explanation.'
-
-_SCOPE_INSTRUCTIONS = 'Extract the scope of work from this tender text. Return a JSON object with key "scope_of_work" containing "tasks" array and "exclusions" array.\n\nEach task: {{"task_description": "...", "responsible_party": "...", "timeline": "..."}}\nEach exclusion: {{"exclusion_description": "..."}}\n\nUse "NOT_FOUND" for missing sub-fields. Only extract content explicitly in the text.\n\nTENDER TEXT:\n{context}'
+SCOPE_INSTRUCTIONS = (
+    'Extract the scope of work from this tender text. '
+    'Return a JSON object with key "scope_of_work" containing "tasks" array and "exclusions" array.\n\n'
+    'Each task: {{"task_description": "...", "responsible_party": "...", "timeline": "..."}}\n'
+    'Each exclusion: {{"exclusion_description": "..."}}\n\n'
+    'Use "NOT_FOUND" for missing sub-fields. Only extract content explicitly in the text.\n\n'
+    "TENDER TEXT:\n{context}"
+)
 
 
+lines = []
+lines.append('"""')
+lines.append('extraction.py -- Real LLM-powered extraction via llama-cpp-python.')
+lines.append('')
+lines.append('Anti-hallucination strategy:')
+lines.append('  - Chain-of-thought prompting (reason first, then format)')
+lines.append('  - Few-shot examples in prompts (concrete input->output)')
+lines.append('  - Explicit NOT_FOUND for missing fields')
+lines.append('  - Source citations required for every extraction')
+lines.append('  - Low temperature (0.05) + top_p + repeat_penalty for determinism')
+lines.append('"""')
+lines.append('')
+lines.append('from __future__ import annotations')
+lines.append('')
+lines.append('import json')
+lines.append('import logging')
+lines.append('import re')
+lines.append('import time')
+lines.append('import threading')
+lines.append('import sys')
+lines.append('from pathlib import Path')
+lines.append('from typing import Any, Dict, List, Optional')
+lines.append('')
+lines.append('from rapidfuzz import fuzz')
+lines.append('')
+lines.append('from tender_extraction.config import config')
+lines.append('from tender_extraction.schemas import Chunk')
+lines.append('')
+lines.append('logger = logging.getLogger(__name__)')
+lines.append('')
+lines.append('_llm_instance = None')
+lines.append('')
+lines.append('# Chat template tags for Phi-3')
+lines.append(f'_SYS_OPEN = "{SYS_TAG_OPEN}"')
+lines.append(f'_TAG_END = "{SYS_TAG_CLOSE}"')
+lines.append(f'_USER_OPEN = "{USER_TAG_OPEN}"')
+lines.append(f'_ASST_OPEN = "{ASST_TAG_OPEN}"')
+lines.append(f'_EOS = "{END_TAG}"')
+lines.append('')
+lines.append(f'_SPEC_SYSTEM = {repr(SPEC_SYSTEM)}')
+lines.append('')
+lines.append(f'_SPEC_FEW_SHOT = {repr(FEW_SHOT_EXAMPLE)}')
+lines.append('')
+lines.append(f'_SPEC_INSTRUCTIONS = {repr(SPEC_INSTRUCTIONS)}')
+lines.append('')
+lines.append(f'_SCOPE_SYSTEM = {repr(SCOPE_SYSTEM)}')
+lines.append('')
+lines.append(f'_SCOPE_INSTRUCTIONS = {repr(SCOPE_INSTRUCTIONS)}')
+lines.append('')
+lines.append('')
+
+# Now add all the functions
+lines.append(r'''
 class LLMProgressIndicator:
     """Shows a live progress indicator during LLM inference."""
 
@@ -422,4 +502,12 @@ if __name__ == "__main__":
         _sys.exit(1)
 
     print("\nExtraction smoke test passed.")
+'''.lstrip())
 
+
+full_content = "\n".join(lines) + "\n"
+
+with open(OUTPATH, "w", encoding="utf-8") as f:
+    f.write(full_content)
+
+print(f"Generated {OUTPATH} ({len(full_content)} bytes, {full_content.count(chr(10))} lines)")

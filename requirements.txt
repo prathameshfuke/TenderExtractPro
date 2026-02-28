@@ -10,9 +10,9 @@ pdf2image==1.17.0
 opencv-python>=4.8.0
 
 # Retrieval
-rank-bm25==0.2.2
+chromadb>=0.4.0
 sentence-transformers==3.4.1
-faiss-cpu>=1.7.0
+rank-bm25==0.2.2
 
 # LLM
 llama-cpp-python==0.3.4

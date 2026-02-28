@@ -28,7 +28,7 @@ from tender_extraction.config import config
 from tender_extraction.ingestion import ingest_document
 from tender_extraction.table_extraction import extract_tables, parse_table_to_specs
 from tender_extraction.chunking import create_chunks
-from tender_extraction.retrieval import HybridRetriever
+from tender_extraction.retrieval import HybridRetriever, expand_query
 from tender_extraction.extraction import extract_specifications, extract_scope_of_work
 from tender_extraction.validation import validate_extractions, validate_schema
 
@@ -90,8 +90,10 @@ class TenderExtractionPipeline:
         result = pipeline.run("dataset/globaltender1576.pdf", output_path="out.json")
     """
 
-    def __init__(self):
+    def __init__(self, persist_dir: Optional[str] = None, force_reindex: bool = False):
         self._retriever: Optional[HybridRetriever] = None
+        self._persist_dir = persist_dir
+        self._force_reindex = force_reindex
 
     def run(
         self,
@@ -152,16 +154,16 @@ class TenderExtractionPipeline:
         t0 = time.time()
         _progress(4, 6, "Building retrieval index + querying...")
         logger.info("[4/6] Building retrieval index + querying ...")
-        self._retriever = HybridRetriever()
-        self._retriever.build_index(chunks)
+        self._retriever = HybridRetriever(persist_dir=self._persist_dir)
+        self._retriever.build_index(chunks, force_rebuild=self._force_reindex)
 
         topic = discover_document_topic(pages)
-        spec_queries = build_targeted_queries(topic)
+        spec_queries = [expand_query(q) for q in build_targeted_queries(topic)]
         scope_queries = [
-            "scope of work tasks deliverables responsibilities obligations",
-            "project timeline schedule completion delivery timeline milestones",
-            "exclusions not included out of scope boundary limits vendor excluded",
-            "contractor requirements obligations supply detailed tasks breakdown",
+            expand_query("scope of work tasks deliverables responsibilities obligations"),
+            expand_query("project timeline schedule completion delivery timeline milestones"),
+            expand_query("exclusions not included out of scope boundary limits vendor excluded"),
+            expand_query("contractor requirements obligations supply detailed tasks breakdown"),
         ]
 
         # Drastically increase top_k to give the LLM the maximum context window
@@ -291,6 +293,7 @@ def main():
     parser.add_argument("file", help="Path to tender document (PDF, DOCX, JPG, PNG)")
     parser.add_argument("--output", "-o", default=None, help="JSON output path (default: stdout)")
     parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
+    parser.add_argument("--reindex", action="store_true", help="Force ChromaDB re-indexing")
 
     args = parser.parse_args()
 
@@ -301,7 +304,7 @@ def main():
         datefmt="%H:%M:%S",
     )
 
-    pipeline = TenderExtractionPipeline()
+    pipeline = TenderExtractionPipeline(force_reindex=args.reindex)
 
     try:
         result = pipeline.run(args.file, args.output)

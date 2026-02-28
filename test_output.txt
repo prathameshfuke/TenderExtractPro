@@ -1,0 +1,109 @@
+﻿d:\TenderExtractPro\ve
+nv\Scripts\python.exe 
+: INFO | Created 3 
+total chunks (0 
+table, 3 text/ocr)
+At line:1 char:1
++ d:\TenderExtractPro\
+venv\Scripts\python.ex
+e d:\TenderExtractPro\
+tests ...
++ ~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~~~~~~~~~~~~~~~~~~
+~~~~~
+    + CategoryInfo    
+          : NotSpeci  
+  fied: (INFO | Cre   
+ ated ...le, 3 tex    
+t/ocr):String) []    
+, RemoteException
+    + FullyQualifiedE 
+   rrorId : NativeCo  
+  mmandError
+ 
+INFO | Created 2 
+table-row chunks from 
+1 tables
+INFO | Created 2 
+total chunks (2 
+table, 0 text/ocr)
+WARNING | REJECTED 
+spec 'Hallucinated' 
+(grounding=0.28 < 
+threshold=0.40). 
+Likely hallucination.
+INFO | Validation: 
+1/2 specs passed 
+(HIGH=1, MEDIUM=0, 
+LOW=0), 0/0 tasks 
+passed, 1 rejected
+D:\TenderExtractPro\ve
+nv\Lib\site-packages\c
+hromadb\config.py:20: 
+UserWarning: Core 
+Pydantic V1 
+functionality isn't 
+compatible with 
+Python 3.14 or 
+greater.
+  from pydantic.v1 
+import BaseSettings
+INFO | Opening PDF: 
+globaltender1576.pdf 
+(48 pages)
+INFO | Ingested 
+globaltender1576.pdf: 
+48 pages (48 text, 0 
+OCR)
+INFO | Extracted 92 
+tables from D:\TenderE
+xtractPro\dataset\Tend
+erdocuments.pdf 
+across 51 pages
+INFO | Opening PDF: 
+globaltender1576.pdf 
+(48 pages)
+INFO | Ingested 
+globaltender1576.pdf: 
+48 pages (48 text, 0 
+OCR)
+INFO | Extracted 48 
+tables from D:\TenderE
+xtractPro\dataset\glob
+altender1576.pdf 
+across 47 pages
+INFO | Created 1215 
+table-row chunks from 
+48 tables
+INFO | Created 1517 
+total chunks (1215 
+table, 302 text/ocr)
+
+============================================================
+  TenderExtractPro -- Test Suite
+============================================================
+
+  PASS: test_spec_schema_defaults
+  PASS: test_empty_spec_text_rejected
+  PASS: test_extraction_result_roundtrip
+  PASS: test_chunking_with_sections (3 chunks)
+  PASS: test_chunking_table_rows (2 chunks)
+  PASS: test_column_mapping_standard: {'item_name': 0, 'specification_text': 2, 'unit': 3, 'numeric_value': 4}
+  PASS: test_column_mapping_alternate: {'item_name': 1, 'numeric_value': 2}
+  PASS: test_clean_table
+  PASS: test_grounding_exact_match (score=0.989)
+  PASS: test_grounding_rejects_hallucination (score=0.377)
+  PASS: test_confidence_mapping
+  PASS: test_enforce_not_found
+  PASS: test_validation_rejects_hallucinated (1 accepted, 1 rejected)
+  FAIL: test_query_expansion: unable to infer type for attribute "chroma_server_nofile"
+  FAIL: test_chromadb_retrieval: unable to infer type for attribute "chroma_server_nofile"
+  PASS: test_real_pdf_ingestion (48 pages, 100,080 chars)
+  PASS: test_real_pdf_table_extraction (92 tables)
+  PASS: test_real_pdf_chunking (1517 chunks, types: {'table': 1215, 'paragraph': 302})
+
+============================================================
+  Results: 16 passed, 2 failed, 18 total
+============================================================
+

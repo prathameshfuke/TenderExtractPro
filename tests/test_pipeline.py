@@ -267,6 +267,52 @@ def test_real_pdf_chunking():
     print(f"  PASS: test_real_pdf_chunking ({len(chunks)} chunks, types: {types})")
 
 
+def test_query_expansion():
+    from tender_extraction.retrieval import expand_query
+    expanded = expand_query("specification tolerance material")
+    assert len(expanded) > len("specification tolerance material")
+    assert "tolerance" in expanded
+    print(f"  PASS: test_query_expansion ('{expanded[:60]}...')")
+
+
+def test_chromadb_retrieval():
+    """Test ChromaDB-based retrieval with synthetic chunks."""
+    from tender_extraction.retrieval import HybridRetriever
+    from tender_extraction.schemas import Chunk, ChunkMetadata
+    import shutil
+
+    chunks = [
+        Chunk(
+            chunk_id="chunk_test_1",
+            text="Steel reinforcement bars shall be Grade 60 conforming to ASTM A615.",
+            metadata=ChunkMetadata(page=15, section="Materials", chunk_type="paragraph"),
+        ),
+        Chunk(
+            chunk_id="chunk_test_2",
+            text="The scope of work includes site preparation and foundation laying.",
+            metadata=ChunkMetadata(page=5, section="Scope", chunk_type="paragraph"),
+        ),
+        Chunk(
+            chunk_id="chunk_test_3",
+            text="Cement shall be OPC Grade 53 conforming to IS 12269.",
+            metadata=ChunkMetadata(page=16, section="Materials", chunk_type="paragraph"),
+        ),
+    ]
+
+    persist_dir = "./_test_chroma_db"
+    try:
+        retriever = HybridRetriever(persist_dir=persist_dir)
+        retriever.build_index(chunks, force_rebuild=True)
+        results = retriever.retrieve("steel reinforcement grade", top_k=3)
+        assert len(results) > 0
+        # The most relevant chunk should be about steel
+        top_chunk_text = results[0]["chunk"].text.lower()
+        assert "steel" in top_chunk_text or "reinforcement" in top_chunk_text
+        print(f"  PASS: test_chromadb_retrieval ({len(results)} results, top='{results[0]['chunk'].text[:40]}...')")
+    finally:
+        shutil.rmtree(persist_dir, ignore_errors=True)
+
+
 # -- Runner --
 
 def run_all_tests():
@@ -288,6 +334,8 @@ def run_all_tests():
         test_confidence_mapping,
         test_enforce_not_found,
         test_validation_rejects_hallucinated,
+        test_query_expansion,
+        test_chromadb_retrieval,
         test_real_pdf_ingestion,
         test_real_pdf_table_extraction,
         test_real_pdf_chunking,
