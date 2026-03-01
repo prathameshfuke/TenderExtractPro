@@ -21,6 +21,7 @@ import os
 import sys
 import time
 import re
+import concurrent.futures
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -99,11 +100,22 @@ class TenderExtractionPipeline:
         self,
         file_path: str,
         output_path: Optional[str] = None,
+        progress_callback=None,
     ) -> Dict[str, Any]:
         """
         Run all 6 stages on a real document. Produces real JSON output.
         Raises RuntimeError if the LLM model is not available.
+        
+        Args:
+            progress_callback: Optional callable(progress: int, message: str).
+                               Called at each stage with 0-100 progress and a message.
         """
+        def _update(pct: int, msg: str):
+            if progress_callback:
+                try:
+                    progress_callback(pct, msg)
+                except Exception:
+                    pass
         overall_start = time.time()
         path = Path(file_path)
         logger.info("=" * 60)
@@ -113,6 +125,7 @@ class TenderExtractionPipeline:
 
         # -- Stage 1: Ingestion ------------------------------------------------
         t0 = time.time()
+        _update(5, "Ingesting document pages...")
         _progress(1, 6, "Ingesting document...")
         logger.info("[1/6] Ingesting document ...")
         pages = ingest_document(file_path)
@@ -126,6 +139,7 @@ class TenderExtractionPipeline:
 
         # -- Stage 2: Table Extraction -----------------------------------------
         t0 = time.time()
+        _update(20, "Extracting tables...")
         _progress(2, 6, "Extracting tables...")
         logger.info("[2/6] Extracting tables ...")
         tables = []
@@ -141,6 +155,7 @@ class TenderExtractionPipeline:
 
         # -- Stage 3: Chunking -------------------------------------------------
         t0 = time.time()
+        _update(35, "Chunking document text...")
         _progress(3, 6, "Creating chunks...")
         logger.info("[3/6] Creating chunks ...")
         chunks = create_chunks(pages, tables)
@@ -152,6 +167,7 @@ class TenderExtractionPipeline:
 
         # -- Stage 4: Retrieval ------------------------------------------------
         t0 = time.time()
+        _update(45, "Building hybrid retrieval index...")
         _progress(4, 6, "Building retrieval index + querying...")
         logger.info("[4/6] Building retrieval index + querying ...")
         self._retriever = HybridRetriever(persist_dir=self._persist_dir)
@@ -177,11 +193,27 @@ class TenderExtractionPipeline:
 
         # -- Stage 5: LLM Extraction ------------------------------------------
         t0 = time.time()
-        _progress(5, 6, "Running LLM extraction (1-3m)...")
-        logger.info("[5/6] Running LLM extraction ...")
+        _update(60, "Running LLM extraction (this takes 1-3 min)...")
+        _progress(5, 6, "Running LLM extraction (concurrent)...")
+        logger.info("[5/6] Running LLM extraction concurrently ...")
 
-        llm_specs = extract_specifications(spec_chunks, topic=topic)
-        llm_scope = extract_scope_of_work(scope_chunks, topic=topic)
+        llm_specs = []
+        llm_scope = {"tasks": [], "exclusions": []}
+        
+        # NOTE: LLM inference is serialized by _llm_lock in extraction.py.
+        # Running in threads just adds overhead without true parallelism,
+        # so we run them sequentially for clarity and reliability.
+        try:
+            _update(62, "LLM extracting technical specifications...")
+            llm_specs = extract_specifications(spec_chunks, topic)
+        except Exception as e:
+            logger.error("Failed to extract specifications: %s", e)
+
+        try:
+            _update(78, "LLM extracting scope of work...")
+            llm_scope = extract_scope_of_work(scope_chunks, topic)
+        except Exception as e:
+            logger.error("Failed to extract scope of work: %s", e)
 
         # Table-extracted specs come first because they're more reliable
         # (structured column mapping vs. LLM generation)
@@ -194,6 +226,7 @@ class TenderExtractionPipeline:
 
         # -- Stage 6: Validation -----------------------------------------------
         t0 = time.time()
+        _update(90, "Validating and grounding extractions...")
         _progress(6, 6, "Validating and grounding extractions...")
         logger.info("[6/6] Validating and grounding ...")
 

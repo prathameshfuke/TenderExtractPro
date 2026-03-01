@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from typing import Any, Dict, List
+import concurrent.futures
 
 import pdfplumber
 from PIL import Image, ImageEnhance, ImageFilter
@@ -49,35 +50,65 @@ def ingest_document(file_path: str) -> List[Dict[str, Any]]:
         raise ValueError(f"Unsupported format: {suffix}")
 
 
+def _process_pdf_page(path: Path, idx: int, text: str, total_pages: int) -> Dict[str, Any]:
+    """Helper function to process a single PDF page."""
+    if len(text.strip()) < config.ocr.scanned_char_threshold:
+        # Page is likely scanned. OCR it.
+        logger.info(
+            f"Page {idx}/{total_pages}: only {len(text.strip())} chars detected, "
+            f"treating as scanned and applying OCR"
+        )
+        ocr_text = _ocr_pdf_page(path, idx)
+        return {"page": idx, "text": ocr_text, "is_ocr": True}
+    else:
+        return {"page": idx, "text": text, "is_ocr": False}
+
+
 def _ingest_pdf(path: Path) -> List[Dict[str, Any]]:
     """
     Process a PDF page-by-page, deciding text extraction vs OCR per page.
 
-    We do this per-page rather than per-document because real tenders often
-    mix text pages (typed sections) with scanned pages (signed appendices,
-    hand-drawn diagrams). The RFPPBMCJob290 tender from our test set has
-    exactly this: pages 1-40 are text, pages 41-55 are scanned annexures.
+    Pages that require OCR are dispatched to a ProcessPoolExecutor to be
+    processed in parallel, drastically speeding up ingestion of large scanned
+    documents.
     """
     pages: List[Dict[str, Any]] = []
-
+    
+    # First, quickly extract all raw text using pdfplumber sequentially
+    # This is fast and I/O bound
+    raw_pages_data = []
     with pdfplumber.open(str(path)) as pdf:
         total_pages = len(pdf.pages)
         logger.info("Opening PDF: %s (%d pages)", path.name, total_pages)
-
         for idx, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
-
-            if len(text.strip()) < config.ocr.scanned_char_threshold:
-                # Page is likely scanned. OCR it.
-                # This is slow (~2-3s per page at 300 DPI) but necessary.
-                logger.info(
-                    "Page %d/%d: only %d chars detected, treating as scanned",
-                    idx, total_pages, len(text.strip())
-                )
-                ocr_text = _ocr_pdf_page(path, idx)
-                pages.append({"page": idx, "text": ocr_text, "is_ocr": True})
-            else:
-                pages.append({"page": idx, "text": text, "is_ocr": False})
+            raw_pages_data.append((path, idx, text, total_pages))
+    
+    # Now process pages (which may trigger slow OCR) in parallel
+    logger.info("Processing %d pages with max_workers=%d", total_pages, config.ocr.max_workers)
+    
+    # ThreadPoolExecutor is safer than ProcessPoolExecutor on Windows:
+    # - Avoids spawn-based multiprocessing issues in the API server context
+    # - OCR (pytesseract / Pillow) releases the GIL, so threads get real parallelism
+    # - Avoids numpy/MSVC ABI crash when spawning child processes
+    with concurrent.futures.ThreadPoolExecutor(max_workers=config.ocr.max_workers) as executor:
+        # Submit all tasks
+        futures = {executor.submit(_process_pdf_page, *data): data for data in raw_pages_data}
+        
+        # Collect results as they complete
+        completed_pages = []
+        for future in concurrent.futures.as_completed(futures):
+            try:
+                page_result = future.result()
+                completed_pages.append(page_result)
+            except Exception as exc:
+                data = futures[future]
+                page_idx = data[1]
+                logger.error("Failed to process page %d: %s", page_idx, exc)
+                completed_pages.append({"page": page_idx, "text": "", "is_ocr": False})
+                
+    # Sort pages by page number since they might complete out of order
+    pages = sorted(completed_pages, key=lambda p: p["page"])
 
     logger.info(
         "Ingested %s: %d pages (%d text, %d OCR)",

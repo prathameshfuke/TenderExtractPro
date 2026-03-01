@@ -28,25 +28,37 @@ def verify_grounding(
     """
     Check how well a single spec's citation matches the source chunks.
 
-    Uses rapidfuzz.fuzz.partial_ratio to find the best fuzzy match of
-    the spec's cited exact_text against all source chunk texts.
+    Checks both spec.source.exact_text AND spec.specification_text against
+    all source chunk texts, returning the best match score. This handles
+    the common case where the LLM paraphrases the exact_text but the
+    specification_text is closer to verbatim.
 
     Returns a float 0.0 to 1.0 representing match quality.
     """
     exact_text = spec.get("source", {}).get("exact_text", "")
-    if not exact_text or exact_text == "NOT_FOUND":
+    spec_text = spec.get("specification_text", "")
+
+    # Collect distinct non-empty texts to check
+    texts_to_check = []
+    if exact_text and exact_text not in ("NOT_FOUND", ""):
+        texts_to_check.append(exact_text)
+    if spec_text and spec_text not in ("NOT_FOUND", "") and spec_text not in texts_to_check:
+        texts_to_check.append(spec_text[:200])  # cap to 200 chars
+
+    if not texts_to_check:
         return 0.0
 
     best_score = 0.0
-    for item in source_chunks:
-        chunk: Chunk = item["chunk"]
-        ratio = fuzz.token_sort_ratio(
-            exact_text.lower().strip(),
-            chunk.text.lower().strip(),
-        )
-        score = ratio / 100.0
-        if score > best_score:
-            best_score = score
+    for text_to_check in texts_to_check:
+        for item in source_chunks:
+            chunk: Chunk = item["chunk"]
+            ratio = fuzz.token_sort_ratio(
+                text_to_check.lower().strip(),
+                chunk.text.lower().strip(),
+            )
+            score = ratio / 100.0
+            if score > best_score:
+                best_score = score
 
     return best_score
 
@@ -180,7 +192,10 @@ def _verify_task_grounding(
 
 def _enforce_not_found(data: Dict[str, Any]) -> Dict[str, Any]:
     """Replace None/empty string values with 'NOT_FOUND' for consistency."""
-    FIELDS = {"unit", "numeric_value", "tolerance", "standard_reference", "material", "timeline"}
+    FIELDS = {
+        "unit", "numeric_value", "tolerance", "standard_reference", "material",
+        "timeline", "responsible_party",
+    }
     for field in FIELDS:
         if field in data:
             val = data[field]

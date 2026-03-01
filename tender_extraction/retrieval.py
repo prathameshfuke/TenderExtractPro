@@ -1,12 +1,12 @@
 """
-retrieval.py — ChromaDB hybrid retrieval with cross-encoder reranking.
+retrieval.py — Hybrid retrieval with cross-encoder reranking.
 
-This module builds a ChromaDB persistent collection for semantic search
-and overlays BM25 keyword matching for hybrid retrieval. A cross-encoder
-reranker refines the final ranking for maximum precision.
+Uses pure-numpy brute-force cosine similarity for semantic search
+(avoids FAISS binary compatibility issues on Python 3.14) overlaid
+with BM25 keyword matching. A cross-encoder reranker refines results.
 
 Architecture:
-  1. ChromaDB collection with all-mpnet-base-v2 embeddings (semantic)
+  1. NumPy brute-force cosine similarity with all-mpnet-base-v2 embeddings
   2. BM25Okapi for keyword-level matching (exact terms, standard codes)
   3. Weighted score fusion (0.4 BM25 + 0.6 embedding)
   4. Cross-encoder reranking on top-50 candidates → final top-k
@@ -14,19 +14,13 @@ Architecture:
 
 from __future__ import annotations
 
-import hashlib
 import logging
-import os
-import shutil
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer, CrossEncoder
-
-import chromadb
-from chromadb.utils import embedding_functions
 
 from tender_extraction.config import config
 from tender_extraction.schemas import Chunk
@@ -61,22 +55,9 @@ def _get_cross_encoder() -> CrossEncoder:
     return _cross_encoder
 
 
-def _collection_fingerprint(chunks: List[Chunk]) -> str:
-    """
-    Create a deterministic fingerprint from chunk contents.
-    Used to detect when the document has changed and the collection
-    needs to be rebuilt.
-    """
-    h = hashlib.sha256()
-    for c in sorted(chunks, key=lambda x: x.chunk_id):
-        h.update(c.chunk_id.encode())
-        h.update(c.text[:200].encode())
-    return h.hexdigest()[:16]
-
-
 class HybridRetriever:
     """
-    ChromaDB + BM25 hybrid retriever with cross-encoder reranking.
+    Numpy cosine-similarity + BM25 hybrid retriever with cross-encoder reranking.
 
     Usage:
         retriever = HybridRetriever()
@@ -87,24 +68,20 @@ class HybridRetriever:
 
     def __init__(self, persist_dir: Optional[str] = None):
         self._chunks: List[Chunk] = []
-        self._chunk_id_map: Dict[str, int] = {}  # chunk_id → index
         self._bm25: Optional[BM25Okapi] = None
         self._tokenized_corpus: List[List[str]] = []
-        self._collection = None
-        self._persist_dir = persist_dir or config.retrieval.chroma_persist_dir
+        # Numpy matrix: shape (n_chunks, embed_dim) — replaces FAISS
+        self._embeddings: Optional[np.ndarray] = None
+        self._persist_dir = persist_dir or "./_retrieval_index"
 
     def build_index(self, chunks: List[Chunk], force_rebuild: bool = False) -> None:
         """
-        Build ChromaDB collection and BM25 index from chunks.
-
-        If a persistent collection already exists with the same fingerprint,
-        skip re-indexing (saves ~8s encoding time on CPU).
+        Build numpy embedding matrix and BM25 index from chunks.
         """
         if not chunks:
             raise ValueError("Cannot build index from empty chunk list.")
 
         self._chunks = chunks
-        self._chunk_id_map = {c.chunk_id: i for i, c in enumerate(chunks)}
         texts = [c.text for c in chunks]
 
         # ── BM25 index ──────────────────────────────────────────────
@@ -112,79 +89,39 @@ class HybridRetriever:
         self._tokenized_corpus = [t.lower().split() for t in texts]
         self._bm25 = BM25Okapi(self._tokenized_corpus)
 
-        # ── ChromaDB collection ─────────────────────────────────────
-        fingerprint = _collection_fingerprint(chunks)
-        collection_name = f"tender_{fingerprint}"
-
-        # Use SentenceTransformer embedding function for ChromaDB
-        ef = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=config.retrieval.embedding_model
+        # ── Numpy embedding matrix ───────────────────────────────────
+        logger.info("Generating embeddings (numpy brute-force cosine)...")
+        embed_model = _get_embed_model()
+        embeddings = embed_model.encode(
+            texts, convert_to_numpy=True, show_progress_bar=False, batch_size=32
         )
-
-        client = chromadb.PersistentClient(
-            path=self._persist_dir,
-        )
-
-        # Check if collection already exists with matching data
-        existing_collections = [c.name for c in client.list_collections()]
-        if collection_name in existing_collections and not force_rebuild:
-            logger.info("ChromaDB collection '%s' exists — reusing.", collection_name)
-            self._collection = client.get_collection(
-                name=collection_name,
-                embedding_function=ef,
-            )
-        else:
-            # Clean up old collections
-            for old_name in existing_collections:
-                if old_name.startswith("tender_"):
-                    try:
-                        client.delete_collection(old_name)
-                    except Exception:
-                        pass
-
-            logger.info("Building ChromaDB collection '%s' for %d chunks ...",
-                        collection_name, len(chunks))
-            self._collection = client.create_collection(
-                name=collection_name,
-                embedding_function=ef,
-                metadata={"hnsw:space": "cosine"},
-            )
-
-            # Add chunks in batches (ChromaDB has a batch size limit)
-            batch_size = 500
-            for i in range(0, len(chunks), batch_size):
-                batch = chunks[i:i + batch_size]
-                self._collection.add(
-                    ids=[c.chunk_id for c in batch],
-                    documents=[c.text for c in batch],
-                    metadatas=[{
-                        "page": c.metadata.page,
-                        "section": c.metadata.section,
-                        "chunk_type": c.metadata.chunk_type,
-                        "parent_section": c.metadata.parent_section,
-                    } for c in batch],
-                )
-            logger.info("ChromaDB collection built with %d chunks.", len(chunks))
+        embeddings = np.array(embeddings, dtype=np.float32)
+        # L2-normalize so dot product == cosine similarity
+        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
+        norms = np.where(norms == 0, 1.0, norms)
+        self._embeddings = embeddings / norms
 
         logger.info(
-            "Index built: %d chunks, BM25 vocab=%d tokens, ChromaDB collection='%s'",
-            len(chunks), sum(len(t) for t in self._tokenized_corpus), collection_name,
+            "Index built: %d chunks, BM25 vocab=%d tokens, embed_dim=%d",
+            len(chunks),
+            sum(len(t) for t in self._tokenized_corpus),
+            self._embeddings.shape[1],
         )
 
     def retrieve(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
         """
-        Hybrid retrieval: ChromaDB semantic + BM25 keyword with cross-encoder reranking.
+        Hybrid retrieval: numpy cosine similarity + BM25 + cross-encoder reranking.
 
         Pipeline:
           1. BM25 scores for all chunks (keyword matching)
-          2. ChromaDB query for semantic similarity (top rerank_top_k)
+          2. Numpy cosine similarity for semantic search (all chunks, brute-force)
           3. Weighted fusion of normalized scores
           4. Cross-encoder reranking of top candidates
           5. Return final top_k
 
         Returns list of dicts: {chunk, score, bm25_score, embedding_score}.
         """
-        if self._bm25 is None or self._collection is None:
+        if self._bm25 is None or self._embeddings is None:
             raise RuntimeError("Index not built. Call build_index() first.")
 
         n = len(self._chunks)
@@ -194,23 +131,18 @@ class HybridRetriever:
         query_tokens = query.lower().split()
         bm25_raw = np.array(self._bm25.get_scores(query_tokens), dtype="float32")
 
-        # ── Step 2: ChromaDB semantic search ────────────────────────
-        chroma_results = self._collection.query(
-            query_texts=[query],
-            n_results=min(rerank_k, n),
-            include=["distances"],
-        )
-
-        # ChromaDB cosine distance → similarity (1 - distance)
-        emb_raw = np.zeros(n, dtype="float32")
-        if chroma_results and chroma_results["ids"] and chroma_results["ids"][0]:
-            for doc_id, distance in zip(
-                chroma_results["ids"][0],
-                chroma_results["distances"][0],
-            ):
-                if doc_id in self._chunk_id_map:
-                    idx = self._chunk_id_map[doc_id]
-                    emb_raw[idx] = max(0, 1.0 - distance)
+        # ── Step 2: Numpy cosine similarity ─────────────────────────
+        embed_model = _get_embed_model()
+        qvec = embed_model.encode([query], convert_to_numpy=True)
+        qvec = np.array(qvec, dtype=np.float32)
+        # L2-normalize the query vector
+        qnorm = np.linalg.norm(qvec)
+        if qnorm > 0:
+            qvec = qvec / qnorm
+        # Cosine similarity = dot product (embeddings already normalized)
+        emb_raw = (self._embeddings @ qvec.T).squeeze()  # shape (n,)
+        # Shift from [-1, 1] to [0, 1]
+        emb_raw = (emb_raw + 1.0) / 2.0
 
         # ── Step 3: Weighted fusion ─────────────────────────────────
         bm25_norm = _min_max_normalize(bm25_raw)
@@ -292,69 +224,58 @@ class HybridRetriever:
         max_page: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """
-        Filtered retrieval using ChromaDB metadata filters.
-        Useful for targeting specific chunk types or page ranges.
+        Filtered retrieval using numpy cosine similarity with post-filtering.
         """
-        if self._collection is None:
+        if self._embeddings is None:
             raise RuntimeError("Index not built. Call build_index() first.")
 
-        where_filter = {}
-        conditions = []
-
-        if chunk_types:
-            conditions.append({"chunk_type": {"$in": chunk_types}})
-        if min_page is not None:
-            conditions.append({"page": {"$gte": min_page}})
-        if max_page is not None:
-            conditions.append({"page": {"$lte": max_page}})
-
-        if len(conditions) > 1:
-            where_filter = {"$and": conditions}
-        elif len(conditions) == 1:
-            where_filter = conditions[0]
-
-        try:
-            chroma_results = self._collection.query(
-                query_texts=[query],
-                n_results=min(top_k, len(self._chunks)),
-                where=where_filter if where_filter else None,
-                include=["distances"],
-            )
-        except Exception as exc:
-            logger.warning("Filtered query failed: %s. Falling back to unfiltered.", exc)
-            return self.retrieve(query, top_k=top_k)
+        embed_model = _get_embed_model()
+        qvec = embed_model.encode([query], convert_to_numpy=True)
+        qvec = np.array(qvec, dtype=np.float32)
+        qnorm = np.linalg.norm(qvec)
+        if qnorm > 0:
+            qvec = qvec / qnorm
+        # All cosine similarities
+        sims = (self._embeddings @ qvec.T).squeeze()
+        # Sort descending
+        sorted_indices = np.argsort(sims)[::-1]
 
         results = []
-        if chroma_results and chroma_results["ids"] and chroma_results["ids"][0]:
-            for doc_id, distance in zip(
-                chroma_results["ids"][0],
-                chroma_results["distances"][0],
-            ):
-                if doc_id in self._chunk_id_map:
-                    idx = self._chunk_id_map[doc_id]
-                    score = max(0, 1.0 - distance)
-                    results.append({
-                        "chunk": self._chunks[idx],
-                        "score": score,
-                        "bm25_score": 0.0,
-                        "embedding_score": score,
-                    })
+        for idx in sorted_indices:
+            idx = int(idx)
+            chunk = self._chunks[idx]
 
-        results.sort(key=lambda x: x["score"], reverse=True)
-        return results[:top_k]
+            if chunk_types and chunk.metadata.chunk_type not in chunk_types:
+                continue
+            if min_page is not None and chunk.metadata.page < min_page:
+                continue
+            if max_page is not None and chunk.metadata.page > max_page:
+                continue
+
+            score = float((sims[idx] + 1.0) / 2.0)
+            results.append({
+                "chunk": chunk,
+                "score": score,
+                "bm25_score": 0.0,
+                "embedding_score": score,
+            })
+
+            if len(results) >= top_k:
+                break
+
+        return results
 
     def save(self, directory: str) -> None:
-        """ChromaDB auto-persists. This is a no-op for API compatibility."""
-        logger.info("ChromaDB auto-persists to: %s", self._persist_dir)
+        """FAISS doesn't auto-persist, but we add dummy API for compatibility."""
+        logger.info("FAISS index built in-memory. Persistence mocked.")
 
     @classmethod
     def load(cls, directory: str) -> "HybridRetriever":
         """
-        Load is not needed for ChromaDB (auto-persistent).
-        Create a new retriever pointing to the persist directory.
+        Load is mocked for API compatibility. Index built fresh.
         """
         retriever = cls(persist_dir=directory)
-        logger.info("HybridRetriever configured with persist_dir: %s", directory)
+        logger.info("HybridRetriever loaded (mock persistence).")
         return retriever
 
 
@@ -425,8 +346,8 @@ if __name__ == "__main__":
     chunks = create_chunks(pages, tables)
     print(f"Created {len(chunks)} chunks.")
 
-    print("Building ChromaDB hybrid index ...")
-    retriever = HybridRetriever(persist_dir="./_test_chroma_db")
+    print("Building FAISS hybrid index ...")
+    retriever = HybridRetriever()
     retriever.build_index(chunks)
 
     # Test retrieval with real queries
@@ -447,6 +368,4 @@ if __name__ == "__main__":
     expanded = expand_query("specification tolerance material")
     print(f"\nExpanded query: '{expanded}'")
 
-    # Cleanup
-    shutil.rmtree("./_test_chroma_db", ignore_errors=True)
     print("\nRetrieval smoke test passed.")

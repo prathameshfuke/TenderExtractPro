@@ -2,30 +2,31 @@
 # All pinned for reproducibility.
 
 # Document ingestion
-pdfplumber==0.11.4
-python-docx==1.1.2
-pytesseract==0.3.13
-Pillow==11.1.0
-pdf2image==1.17.0
+pdfplumber>=0.11.0
+python-docx>=1.1.0
+pytesseract>=0.3.10
+Pillow>=10.0.0
+pdf2image>=1.16.0
 opencv-python>=4.8.0
 
-# Retrieval
-chromadb>=0.4.0
-sentence-transformers==3.4.1
-rank-bm25==0.2.2
+# Retrieval — Hybrid BM25 + numpy cosine similarity (no FAISS dependency)
+# faiss-cpu was removed: it bundles MINGW-built OpenBLAS DLLs that crash on Python 3.14
+pyarrow>=12.0.0
+sentence-transformers>=3.0.0
+rank-bm25>=0.2.0
 
 # LLM
 llama-cpp-python==0.3.4
 
 # Schemas and validation
-pydantic==2.10.6
+pydantic>=2.0.0
 rapidfuzz>=3.0.0
 
 # Tokenization
-tiktoken==0.8.0
+tiktoken>=0.8.0
 
-# Numerics
-numpy==2.2.3
+# Numerics — numpy 2.4+ required for Python 3.14 (MSVC build, not MINGW)
+numpy>=2.4.0
 
 # Web API
 fastapi>=0.110.0

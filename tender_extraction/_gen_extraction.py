@@ -192,59 +192,65 @@ def load_model():
     logger.info("LLM loaded on GPU successfully.")
     return _llm_instance
 
+def _get_json_grammar():
+    from llama_cpp import LlamaGrammar
+    # Simple JSON grammar to force standard valid syntax
+    prompt_grammar = r"""
+        root   ::= object
+        value  ::= object | array | string | number | "true" | "false" | "null"
+        object ::=
+        "{" ws "}"
+        | "{" ws string ws ":" ws value ws ("," ws string ws ":" ws value ws)* "}"
+        array  ::=
+        "[" ws "]"
+        | "[" ws value ws ("," ws value ws)* "]"
+        string ::=
+        "\"" (
+            [^"\\\x7F\x00-\x1F] |
+            "\\" (["\\/bfnrt] | "u" [0-9a-fA-F]{4}) # escapes
+        )* "\""
+        number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
+        ws     ::= ([ \t\n] ws)?
+    """
+    return LlamaGrammar.from_string(prompt_grammar)
+
 
 def extract_specifications(
     retrieved_chunks: List[Dict[str, Any]],
     topic: str = "",
 ) -> List[Dict[str, Any]]:
-    """Extract technical specifications from retrieved chunks using the LLM."""
+    """Extract technical specifications from retrieved chunks using the LLM with Grammar enforcement."""
     llm = load_model()
     context = _build_context(retrieved_chunks)
     prompt = build_spec_prompt(context, topic)
 
-    raw = _call_llm(llm, prompt, "Phi-3 extracting specifications")
-    parsed = _clean_and_parse_json(raw, "technical_specifications")
-
-    if not parsed or "technical_specifications" not in parsed:
-        logger.warning("First LLM call failed to produce valid JSON. Retrying ...")
-        strict_prompt = prompt + (
-            "\n\nIMPORTANT: Your previous response was not valid JSON. "
-            "This time, output ONLY a JSON object starting with { and "
-            "ending with }. No explanation, no markdown, JUST THE JSON."
-        )
-        raw = _call_llm(llm, strict_prompt, "Phi-3 extracting specifications (retry)")
-        parsed = _clean_and_parse_json(raw, "technical_specifications")
-
-    if not parsed or "technical_specifications" not in parsed:
-        logger.error("LLM failed to produce valid specs after retry.")
+    grammar = _get_json_grammar()
+    raw = _call_llm(llm, prompt, "Phi-3 extracting specifications", grammar)
+    
+    try:
+        parsed = json.loads(raw)
+        return parsed.get("technical_specifications", [])
+    except json.JSONDecodeError as exc:
+        logger.error("LLM failed to produce valid JSON specs despite Grammar: %s", exc)
         return []
-
-    return parsed.get("technical_specifications", [])
 
 
 def extract_scope_of_work(
     retrieved_chunks: List[Dict[str, Any]],
     topic: str = "",
 ) -> Dict[str, Any]:
-    """Extract scope-of-work from retrieved chunks using the LLM."""
+    """Extract scope-of-work from retrieved chunks using the LLM with Grammar enforcement."""
     llm = load_model()
     context = _build_context(retrieved_chunks)
     prompt = build_scope_prompt(context, topic)
-
-    raw = _call_llm(llm, prompt, "Phi-3 extracting scope of work")
-    parsed = _clean_and_parse_json(raw, "scope_of_work")
-
-    if not parsed or "scope_of_work" not in parsed:
-        logger.warning("Scope extraction: retrying with stricter prompt ...")
-        strict_prompt = prompt + (
-            "\n\nIMPORTANT: Output ONLY valid JSON. No markdown fences. "
-            "Start with { and end with }."
-        )
-        raw = _call_llm(llm, strict_prompt, "Phi-3 extracting scope of work (retry)")
-        parsed = _clean_and_parse_json(raw, "scope_of_work")
-
-    if not parsed or "scope_of_work" not in parsed:
-        logger.error("Scope extraction failed after retry.")
+    
+    grammar = _get_json_grammar()
+    raw = _call_llm(llm, prompt, "Phi-3 extracting scope of work", grammar)
+    
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        logger.error("Scope extraction failed to produce valid JSON: %s", exc)
         return {"tasks": [], "exclusions": []}
 
     if isinstance(parsed, list):
@@ -376,8 +382,8 @@ def _deduplicate_chunks(
 
 # -- LLM call ---------------------------------------------------------------
 
-def _call_llm(llm, prompt: str, progress_message: str = "LLM generating") -> str:
-    """Call the LLM with retry, exponential backoff, and tuned generation params."""
+def _call_llm(llm, prompt: str, progress_message: str = "LLM generating", grammar=None) -> str:
+    """Call the LLM with retry, exponential backoff, grammar enforcement, and tuned generation params."""
     last_error = None
     for attempt in range(1, config.llm.max_retries + 1):
         try:
@@ -389,6 +395,7 @@ def _call_llm(llm, prompt: str, progress_message: str = "LLM generating") -> str
                     top_p=config.llm.top_p,
                     repeat_penalty=config.llm.repeat_penalty,
                     stop=["```", "\n\n\n", _EOS, _TAG_END],
+                    grammar=grammar,
                 )
             text = response["choices"][0]["text"].strip()
             logger.info(
@@ -406,57 +413,6 @@ def _call_llm(llm, prompt: str, progress_message: str = "LLM generating") -> str
             time.sleep(delay)
 
     raise RuntimeError(f"LLM failed after {config.llm.max_retries} retries: {last_error}")
-
-
-# -- JSON parsing -----------------------------------------------------------
-
-def _clean_and_parse_json(raw: str, root_key: str) -> dict:
-    text = raw.strip()
-
-    # Strip markdown fences
-    text = re.sub(r'```json\s*', '', text)
-    text = re.sub(r'```\s*', '', text)
-    text = text.strip()
-
-    # Find first { -- strip any preamble before it
-    first_brace = text.find('{')
-    if first_brace > 0:
-        text = text[first_brace:]
-
-    # If no { found but starts with a key: wrap it
-    if not text.startswith('{'):
-        if text.startswith('"'):
-            text = '{' + text
-
-    # Strip trailing garbage after last valid }
-    last_brace = text.rfind('}')
-    if last_brace != -1:
-        text = text[:last_brace + 1]
-
-    # Attempt 1: direct parse
-    try:
-        result = json.loads(text)
-        if isinstance(result, list):
-            return {root_key: result}
-        return result
-    except json.JSONDecodeError:
-        pass
-
-    # Attempt 2: salvage truncated JSON by closing open structures
-    open_braces = text.count('{') - text.count('}')
-    open_brackets = text.count('[') - text.count(']')
-    text = text + (']' * max(0, open_brackets)) + ('}' * max(0, open_braces))
-    try:
-        result = json.loads(text)
-        if isinstance(result, list):
-            return {root_key: result}
-        return result
-    except json.JSONDecodeError as e:
-        logger.error(f"JSON parse failed after salvage: {e}")
-        logger.error(f"Raw output first 300 chars: {raw[:300]}")
-        if root_key == "scope_of_work":
-            return {root_key: {"tasks": [], "exclusions": []}}
-        return {root_key: []}
 
 
 # -- Smoke test -------------------------------------------------------------

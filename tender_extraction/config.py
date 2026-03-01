@@ -49,6 +49,9 @@ class OCRConfig:
     deskew: bool = True
     denoise: bool = True
     contrast_enhance: bool = True
+    
+    # Multiprocessing for parallel OCR
+    max_workers: int = 4
 
 
 @dataclass
@@ -80,7 +83,6 @@ class RetrievalConfig:
     """
     embedding_model: str = "all-mpnet-base-v2"
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    chroma_persist_dir: str = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
     bm25_weight: float = 0.4
     embedding_weight: float = 0.6
     rerank_top_k: int = 50
@@ -110,6 +112,9 @@ class LLMConfig:
     repeat_penalty: float = 1.15
     max_retries: int = 3
     retry_base_delay: float = 2.0
+    
+    # Multiprocessing for parallel LLM extraction
+    max_workers: int = 2
 
 
 @dataclass

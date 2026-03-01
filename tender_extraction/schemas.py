@@ -7,13 +7,13 @@ to expected extraction outputs with appropriate defaults.
 
 from __future__ import annotations
 from typing import List, Literal, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 
 class SourceCitation(BaseModel):
     """Where in the document an extraction came from."""
-    chunk_id: str = Field(..., description="ID of the source chunk")
-    page: int = Field(..., description="1-based page number")
+    chunk_id: str = Field(default="NOT_FOUND", description="ID of the source chunk")
+    page: int = Field(default=0, description="1-based page number")
     exact_text: str = Field(
         default="NOT_FOUND",
         description="Verbatim quote from the source chunk",
@@ -32,7 +32,7 @@ class TechnicalSpecification(BaseModel):
     source: SourceCitation
     confidence: Literal["HIGH", "MEDIUM", "LOW"] = Field(default="LOW")
 
-    @validator("specification_text")
+    @field_validator("specification_text")
     @classmethod
     def spec_text_must_not_be_empty(cls, v: str) -> str:
         if not v or not v.strip():
@@ -46,13 +46,15 @@ class ScopeTask(BaseModel):
     deliverables: List[str] = Field(default_factory=list)
     timeline: str = Field(default="NOT_FOUND")
     dependencies: List[str] = Field(default_factory=list)
-    source: SourceCitation
+    responsible_party: str = Field(default="NOT_FOUND")
+    source: Optional[SourceCitation] = Field(default=None)
 
 
 class Exclusion(BaseModel):
     """An item explicitly excluded from the scope."""
-    item: str
-    source: SourceCitation
+    item: str = Field(default="NOT_FOUND")
+    exclusion_description: str = Field(default="NOT_FOUND")
+    source: Optional[SourceCitation] = Field(default=None)
 
 
 class ScopeOfWork(BaseModel):

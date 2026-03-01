@@ -38,21 +38,19 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
         from tender_extraction.main import TenderExtractionPipeline
         
         job = jobs[job_id]
+        job["status"] = "running"
+        job["progress"] = 5
+        job["message"] = "Starting pipeline..."
         
-        def update(progress: int, message: str):
+        def progress_callback(progress: int, message: str):
             job["progress"] = progress
             job["message"] = message
             job["status"] = "running"
         
-        update(5,  "Ingesting document pages...")
-        update(20, "Extracting tables...")
-        update(35, "Building ChromaDB + BM25 hybrid index...")
-        update(50, "Running hybrid retrieval...")
-        update(65, "Phi-3 extracting specifications (this takes 1-3 min)...")
-        
         output_path = str(OUTPUT_DIR / f"{job_id}.json")
         pipeline = TenderExtractionPipeline()
-        result = pipeline.run(pdf_path, output_path=output_path)
+        result = pipeline.run(pdf_path, output_path=output_path,
+                              progress_callback=progress_callback)
         
         specs = len(result.get("technical_specifications", []))
         tasks = len(result.get("scope_of_work", {}).get("tasks", []))
