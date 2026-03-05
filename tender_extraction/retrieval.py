@@ -53,6 +53,15 @@ logger = logging.getLogger(__name__)
 _embed_model: Optional[SentenceTransformer] = None
 _cross_encoder: Optional[CrossEncoder] = None
 
+
+def _resolve_torch_device() -> str:
+    """Return 'cuda' when available, else 'cpu'."""
+    try:
+        import torch
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
 # BGE asymmetric instruction used at query time only (not at index time)
 _BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
@@ -62,11 +71,13 @@ def _get_embed_model() -> SentenceTransformer:
     global _embed_model
     if _embed_model is None:
         model_name = config.retrieval.embedding_model
+        device = _resolve_torch_device()
         logger.info("Loading embedding model: %s ...", model_name)
+        logger.info("Embedding model device: %s", device)
         # Some backend loaders print verbose diagnostics directly to stdout/stderr.
         # Silence those so the CLI progress bar stays readable.
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            _embed_model = SentenceTransformer(model_name)
+            _embed_model = SentenceTransformer(model_name, device=device)
         logger.info(
             "Embedding model loaded (dim=%d).",
             _embed_model.get_sentence_embedding_dimension(),
@@ -79,9 +90,11 @@ def _get_cross_encoder() -> CrossEncoder:
     global _cross_encoder
     if _cross_encoder is None:
         model_name = config.retrieval.rerank_model
+        device = _resolve_torch_device()
         logger.info("Loading cross-encoder reranker: %s ...", model_name)
+        logger.info("Cross-encoder device: %s", device)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            _cross_encoder = CrossEncoder(model_name, max_length=512)
+            _cross_encoder = CrossEncoder(model_name, max_length=512, device=device)
         logger.info("Cross-encoder loaded.")
     return _cross_encoder
 

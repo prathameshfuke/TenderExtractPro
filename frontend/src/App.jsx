@@ -17,6 +17,7 @@ function sortJobsByRecency(items) {
 export default function App() {
   const [jobs, setJobs] = useState([]);
   const [selectedJobId, setSelectedJobId] = useState(null);
+  const [backendOnline, setBackendOnline] = useState(true);
 
   const selectedJob = useMemo(
     () => jobs.find((job) => job.job_id === selectedJobId) || null,
@@ -30,6 +31,7 @@ export default function App() {
       try {
         const res = await api.get('/jobs');
         if (!isMounted) return;
+        setBackendOnline(true);
 
         const sorted = sortJobsByRecency(Array.isArray(res.data) ? res.data : []);
         setJobs(sorted);
@@ -37,6 +39,7 @@ export default function App() {
           setSelectedJobId(sorted[0].job_id);
         }
       } catch (err) {
+        setBackendOnline(false);
         console.error('Failed to load jobs', err);
       }
     };
@@ -52,8 +55,10 @@ export default function App() {
       try {
         const res = await api.get('/jobs');
         const incoming = Array.isArray(res.data) ? res.data : [];
+        setBackendOnline(true);
         setJobs(sortJobsByRecency(incoming));
       } catch (err) {
+        setBackendOnline(false);
         console.error('Failed to refresh jobs', err);
       }
     }, 2000);
@@ -68,6 +73,26 @@ export default function App() {
 
   return (
     <div className="app-container">
+      {!backendOnline && (
+        <div style={{
+          position: 'fixed',
+          top: 12,
+          right: 12,
+          zIndex: 999,
+          background: '#3a1111',
+          border: '1px solid #7f1d1d',
+          color: '#fecaca',
+          padding: '10px 12px',
+          fontSize: '0.85rem',
+          maxWidth: '420px'
+        }}>
+          Backend API is offline. Start it with:
+          <div style={{ marginTop: '6px', fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>
+            .\\venv312\\Scripts\\uvicorn.exe api.main:app --host 127.0.0.1 --port 8000 --reload
+          </div>
+        </div>
+      )}
+
       <Sidebar
         jobs={jobs}
         selectedJob={selectedJob}

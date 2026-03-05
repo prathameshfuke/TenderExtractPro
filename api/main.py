@@ -2,6 +2,7 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 import asyncio, uuid, json, os, threading
+import time
 from pathlib import Path
 
 app = FastAPI()
@@ -33,16 +34,34 @@ async def upload(file: UploadFile = File(...)):
     return {"job_id": job_id, "filename": file.filename}
 
 def run_pipeline_sync(job_id: str, pdf_path: str):
+    heartbeat_stop = threading.Event()
+
     try:
         import sys; sys.path.insert(0, ".")
         from tender_extraction.main import TenderExtractionPipeline
         
         job = jobs[job_id]
+        started_at = time.time()
+        stage_state = {"message": "Starting pipeline...", "progress": 5}
+
+        def heartbeat_loop():
+            while not heartbeat_stop.wait(5):
+                if job.get("status") != "running":
+                    continue
+                elapsed = int(time.time() - started_at)
+                base = stage_state["message"]
+                job["message"] = f"{base} ({elapsed}s)"
+
+        heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
+        heartbeat_thread.start()
+
         job["status"] = "running"
         job["progress"] = 5
         job["message"] = "Starting pipeline..."
         
         def progress_callback(progress: int, message: str):
+            stage_state["message"] = message
+            stage_state["progress"] = progress
             job["progress"] = progress
             job["message"] = message
             job["status"] = "running"
@@ -63,6 +82,8 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["message"] = str(e)
+    finally:
+        heartbeat_stop.set()
 
 @app.get("/jobs/{job_id}/status")
 def get_status(job_id: str):
