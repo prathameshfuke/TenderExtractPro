@@ -1,5 +1,4 @@
 # TenderExtractPro — Core Dependencies
-# All pinned for reproducibility.
 
 # Document ingestion
 pdfplumber>=0.11.0
@@ -8,15 +7,17 @@ pytesseract>=0.3.10
 Pillow>=10.0.0
 pdf2image>=1.16.0
 opencv-python>=4.8.0
+pymupdf>=1.24.0
 
-# Retrieval — Hybrid BM25 + numpy cosine similarity (no FAISS dependency)
-# faiss-cpu was removed: it bundles MINGW-built OpenBLAS DLLs that crash on Python 3.14
-pyarrow>=12.0.0
+# Vector store
+qdrant-client>=1.9.0
+
+# Retrieval — Hybrid BM25 + Qdrant dense vectors + cross-encoder reranking
 sentence-transformers>=3.0.0
 rank-bm25>=0.2.0
 
 # LLM
-llama-cpp-python==0.3.4
+llama-cpp-python>=0.3.16
 
 # Schemas and validation
 pydantic>=2.0.0

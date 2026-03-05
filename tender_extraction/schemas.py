@@ -1,12 +1,13 @@
 """
 schemas.py — Pydantic v2 models with strict validation.
 
-These models define the extraction contract. Fields map exactly
-to expected extraction outputs with appropriate defaults.
+Output schema matches the recommended tender extraction format:
+  technical_specifications: list of component + specs-dict + source + confidence
+  scope_of_work: summary + deliverables + exclusions + locations + references
 """
 
 from __future__ import annotations
-from typing import List, Literal, Optional
+from typing import Dict, List, Optional
 from pydantic import BaseModel, Field, field_validator
 
 
@@ -14,6 +15,7 @@ class SourceCitation(BaseModel):
     """Where in the document an extraction came from."""
     chunk_id: str = Field(default="NOT_FOUND", description="ID of the source chunk")
     page: int = Field(default=0, description="1-based page number")
+    clause: str = Field(default="NOT_FOUND", description="Clause or section number (e.g. '3.1.2')")
     exact_text: str = Field(
         default="NOT_FOUND",
         description="Verbatim quote from the source chunk",
@@ -21,62 +23,58 @@ class SourceCitation(BaseModel):
 
 
 class TechnicalSpecification(BaseModel):
-    """A single technical spec extracted from a tender."""
-    item_name: str
-    specification_text: str
-    unit: str = Field(default="NOT_FOUND")
-    numeric_value: str = Field(default="NOT_FOUND")
-    tolerance: str = Field(default="NOT_FOUND")
-    standard_reference: str = Field(default="NOT_FOUND")
-    material: str = Field(default="NOT_FOUND")
-    source: SourceCitation
-    confidence: Literal["HIGH", "MEDIUM", "LOW"] = Field(default="LOW")
+    """
+    A single extracted technical specification.
 
-    @field_validator("specification_text")
+    `component` is the name of the part/system/material.
+    `specs` is a flat dict of parameter → value-with-units, e.g.
+        {"capacity": "10 TR", "power_supply": "415 V 3-phase 50 Hz"}.
+    `confidence` is a 0-1 float set by the grounding verifier.
+    """
+    component: str
+    specs: Dict[str, str] = Field(default_factory=dict)
+    source: SourceCitation = Field(default_factory=SourceCitation)
+    confidence: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    @field_validator("component")
     @classmethod
-    def spec_text_must_not_be_empty(cls, v: str) -> str:
+    def component_must_not_be_empty(cls, v: str) -> str:
         if not v or not v.strip():
-            raise ValueError("specification_text cannot be empty or whitespace")
-        return v
-
-
-class ScopeTask(BaseModel):
-    """A single task within the scope of work."""
-    task_description: str
-    deliverables: List[str] = Field(default_factory=list)
-    timeline: str = Field(default="NOT_FOUND")
-    dependencies: List[str] = Field(default_factory=list)
-    responsible_party: str = Field(default="NOT_FOUND")
-    source: Optional[SourceCitation] = Field(default=None)
-
-
-class Exclusion(BaseModel):
-    """An item explicitly excluded from the scope."""
-    item: str = Field(default="NOT_FOUND")
-    exclusion_description: str = Field(default="NOT_FOUND")
-    source: Optional[SourceCitation] = Field(default=None)
+            raise ValueError("component cannot be empty or whitespace")
+        return v.strip()
 
 
 class ScopeOfWork(BaseModel):
-    """Complete scope-of-work section."""
-    tasks: List[ScopeTask] = Field(default_factory=list)
-    exclusions: List[Exclusion] = Field(default_factory=list)
+    """
+    Complete scope-of-work section.
+
+    `summary`     — concise description (≤120 words).
+    `deliverables`— list of deliverable strings.
+    `exclusions`  — list of items explicitly NOT in scope.
+    `locations`   — site/building locations mentioned.
+    `references`  — clause/page references cited in the scope section.
+    """
+    summary: str = Field(default="NOT_FOUND")
+    deliverables: List[str] = Field(default_factory=list)
+    exclusions: List[str] = Field(default_factory=list)
+    locations: List[str] = Field(default_factory=list)
+    references: List[str] = Field(default_factory=list)
 
 
 class ExtractionResult(BaseModel):
     """Top-level output of the entire pipeline."""
     technical_specifications: List[TechnicalSpecification] = Field(default_factory=list)
     scope_of_work: ScopeOfWork = Field(default_factory=ScopeOfWork)
-    accuracy_score: float = Field(default=0.0, description="Overall accuracy/grounding score percentage (0-100)")
+    accuracy_score: float = Field(default=0.0, description="Overall grounding score 0-100")
 
 
-# Internal models used within the pipeline
+# ── Internal models ───────────────────────────────────────────────────────
 
 class ChunkMetadata(BaseModel):
     """Metadata attached to every chunk."""
     section: str = Field(default="Unknown")
     parent_section: str = Field(default="Unknown")
-    chunk_type: Literal["table", "paragraph", "list", "image_ocr"] = Field(default="paragraph")
+    chunk_type: str = Field(default="paragraph")   # table | paragraph | list | image_ocr
     page: int = Field(default=0)
     table_id: Optional[str] = Field(default=None)
     bbox: Optional[List[float]] = Field(default=None)
@@ -94,29 +92,33 @@ class Chunk(BaseModel):
 if __name__ == "__main__":
     import sys
 
-    # Test 1: valid spec
     spec = TechnicalSpecification(
-        item_name="Steel Bars",
-        specification_text="Grade 60 conforming to ASTM A615",
-        unit="kg",
-        source=SourceCitation(chunk_id="chunk_001", page=15),
+        component="HVAC Unit",
+        specs={"capacity": "10 TR", "power_supply": "415 V 3-phase 50 Hz"},
+        source=SourceCitation(chunk_id="chunk_001", page=5, clause="3.2"),
+        confidence=0.94,
     )
-    assert spec.unit == "kg"
-    assert spec.tolerance == "NOT_FOUND"
-    assert spec.confidence == "LOW"
-    print("Test 1 passed: valid spec with defaults")
+    assert spec.component == "HVAC Unit"
+    assert spec.specs["capacity"] == "10 TR"
+    print("Test 1 passed: valid TechnicalSpecification")
 
-    # Test 2: empty spec_text should fail
+    scope = ScopeOfWork(
+        summary="Supply and install 10 HVAC units.",
+        deliverables=["Supply of 10 HVAC units", "Commissioning"],
+        exclusions=["Civil works not included"],
+        locations=["Building A"],
+        references=["Clause 2, pages 4-6"],
+    )
+    assert scope.exclusions[0] == "Civil works not included"
+    print("Test 2 passed: valid ScopeOfWork")
+
     try:
-        bad = TechnicalSpecification(
-            item_name="Bad",
-            specification_text="   ",
-            source=SourceCitation(chunk_id="x", page=1),
-        )
-        print("Test 2 FAILED: should have raised ValidationError")
+        bad = TechnicalSpecification(component="   ", specs={})
+        print("Test 3 FAILED: should have raised ValidationError")
         sys.exit(1)
     except Exception:
-        print("Test 2 passed: empty spec_text rejected")
+        print("Test 3 passed: empty component rejected")
+
 
     # Test 3: full ExtractionResult round-trip
     result = ExtractionResult(

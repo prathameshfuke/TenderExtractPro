@@ -15,12 +15,14 @@ Produces structured XML/JSON output.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import logging
 import os
 import sys
 import time
 import re
+import warnings
 import concurrent.futures
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -58,28 +60,23 @@ def discover_document_topic(pages: list[dict]) -> str:
 def build_targeted_queries(topic: str) -> list[str]:
     """Build retrieval queries specific to what this tender is actually about."""
     return [
-        topic,                                    # exact topic
-        f"{topic} technical specifications parameters",
-        f"{topic} requirements performance dimensions components",
-        f"{topic} minimum maximum operating parameters",
-        "schedule of requirements specification technical details features",
-        "chapter 4 specifications detailed specs",
-        "supply deliverables system requirements",
-        "warranty maintenance period",
-        "compliance statement specifications",
-        # Aggressive expansion for scientific/engineering equipment params
-        "materials construction tolerance unit measurement operating limits minimum magnetic requirement",
+        topic,
+        # Retrieval template focused on scope/spec sections.
+        (
+            "Find sections related to: Scope of Work, Technical Specifications, "
+            "Equipment Specifications, System Requirements, Annexures containing technical data"
+        ),
+        f"{topic} scope of work work description project scope deliverables",
+        f"{topic} technical specifications technical requirements system requirements",
+        f"{topic} equipment specifications annexure specifications parameter value unit",
+        # Keyword-heavy hybrid booster for BM25
+        "scope work technical specifications requirements equipment system annexure",
+        "schedule of requirements technical details features parameter value unit tolerance",
+        "minimum maximum operating parameters compliance standard IS ASTM",
     ]
 
 
-def _progress(step: int, total: int, label: str, detail: str = ""):
-    bar_len = 30
-    filled = int(bar_len * step / total)
-    bar = "█" * filled + "░" * (bar_len - filled)
-    pct = int(100 * step / total)
-    print(f"\r  [{bar}] {pct:3d}%  Step {step}/{total}: {label}"
-          + (f" — {detail}" if detail else ""), 
-          end="" if step < total else "\n", flush=True)
+# _progress() removed — main() drives tqdm directly via progress_callback
 
 
 class TenderExtractionPipeline:
@@ -126,7 +123,6 @@ class TenderExtractionPipeline:
         # -- Stage 1: Ingestion ------------------------------------------------
         t0 = time.time()
         _update(5, "Ingesting document pages...")
-        _progress(1, 6, "Ingesting document...")
         logger.info("[1/6] Ingesting document ...")
         pages = ingest_document(file_path)
         logger.info(
@@ -140,7 +136,6 @@ class TenderExtractionPipeline:
         # -- Stage 2: Table Extraction -----------------------------------------
         t0 = time.time()
         _update(20, "Extracting tables...")
-        _progress(2, 6, "Extracting tables...")
         logger.info("[2/6] Extracting tables ...")
         tables = []
         table_specs = []
@@ -156,7 +151,6 @@ class TenderExtractionPipeline:
         # -- Stage 3: Chunking -------------------------------------------------
         t0 = time.time()
         _update(35, "Chunking document text...")
-        _progress(3, 6, "Creating chunks...")
         logger.info("[3/6] Creating chunks ...")
         chunks = create_chunks(pages, tables)
         logger.info("  Created: %d chunks in %.1fs", len(chunks), time.time() - t0)
@@ -168,10 +162,10 @@ class TenderExtractionPipeline:
         # -- Stage 4: Retrieval ------------------------------------------------
         t0 = time.time()
         _update(45, "Building hybrid retrieval index...")
-        _progress(4, 6, "Building retrieval index + querying...")
         logger.info("[4/6] Building retrieval index + querying ...")
         self._retriever = HybridRetriever(persist_dir=self._persist_dir)
-        self._retriever.build_index(chunks, force_rebuild=self._force_reindex)
+        collection_name = path.stem  # use filename without extension as collection ID
+        self._retriever.build_index(chunks, collection_name=collection_name, force_rebuild=self._force_reindex)
 
         topic = discover_document_topic(pages)
         spec_queries = [expand_query(q) for q in build_targeted_queries(topic)]
@@ -182,10 +176,9 @@ class TenderExtractionPipeline:
             expand_query("contractor requirements obligations supply detailed tasks breakdown"),
         ]
 
-        # Drastically increase top_k to give the LLM the maximum context window
-        # possible to locate the missing superconducting magnet table text
-        spec_chunks = self._multi_query_retrieve(spec_queries, top_k=30, is_spec=True)
-        scope_chunks = self._multi_query_retrieve(scope_queries, top_k=15)
+        # Keep retrieved context focused to improve precision and reduce LLM latency.
+        spec_chunks = self._multi_query_retrieve(spec_queries, top_k=20, is_spec=True)
+        scope_chunks = self._multi_query_retrieve(scope_queries, top_k=12)
         logger.info(
             "  Retrieved: %d spec chunks, %d scope chunks in %.1fs",
             len(spec_chunks), len(scope_chunks), time.time() - t0,
@@ -194,11 +187,10 @@ class TenderExtractionPipeline:
         # -- Stage 5: LLM Extraction ------------------------------------------
         t0 = time.time()
         _update(60, "Running LLM extraction (this takes 1-3 min)...")
-        _progress(5, 6, "Running LLM extraction (concurrent)...")
         logger.info("[5/6] Running LLM extraction concurrently ...")
 
         llm_specs = []
-        llm_scope = {"tasks": [], "exclusions": []}
+        llm_scope = {"summary": "NOT_FOUND", "deliverables": [], "exclusions": [], "locations": [], "references": []}
         
         # NOTE: LLM inference is serialized by _llm_lock in extraction.py.
         # Running in threads just adds overhead without true parallelism,
@@ -207,27 +199,26 @@ class TenderExtractionPipeline:
             _update(62, "LLM extracting technical specifications...")
             llm_specs = extract_specifications(spec_chunks, topic)
         except Exception as e:
-            logger.error("Failed to extract specifications: %s", e)
+            logger.warning("Failed to extract specifications: %s", e)
 
         try:
             _update(78, "LLM extracting scope of work...")
             llm_scope = extract_scope_of_work(scope_chunks, topic)
         except Exception as e:
-            logger.error("Failed to extract scope of work: %s", e)
+            logger.warning("Failed to extract scope of work: %s", e)
 
         # Table-extracted specs come first because they're more reliable
         # (structured column mapping vs. LLM generation)
         all_specs = table_specs + llm_specs
         logger.info(
-            "  Extracted: %d specs (%d table + %d LLM), %d tasks in %.1fs",
+            "  Extracted: %d specs (%d table + %d LLM), %d deliverables in %.1fs",
             len(all_specs), len(table_specs), len(llm_specs),
-            len(llm_scope.get("tasks", [])), time.time() - t0,
+            len(llm_scope.get("deliverables", [])), time.time() - t0,
         )
 
         # -- Stage 6: Validation -----------------------------------------------
         t0 = time.time()
         _update(90, "Validating and grounding extractions...")
-        _progress(6, 6, "Validating and grounding extractions...")
         logger.info("[6/6] Validating and grounding ...")
 
         raw_result = {
@@ -254,16 +245,16 @@ class TenderExtractionPipeline:
         # -- Summary -----------------------------------------------------------
         elapsed = time.time() - overall_start
         n_specs = len(final_result.get("technical_specifications", []))
-        n_tasks = len(final_result.get("scope_of_work", {}).get("tasks", []))
+        n_deliverables = len(final_result.get("scope_of_work", {}).get("deliverables", []))
         n_excl = len(final_result.get("scope_of_work", {}).get("exclusions", []))
         acc_score = final_result.get("accuracy_score", 0.0)
 
         logger.info("=" * 60)
         logger.info("DONE in %.1fs", elapsed)
-        logger.info("  Specs:      %d", n_specs)
-        logger.info("  Tasks:      %d", n_tasks)
-        logger.info("  Exclusions: %d", n_excl)
-        logger.info("  Accuracy:   %.2f%%", acc_score)
+        logger.info("  Specs:       %d", n_specs)
+        logger.info("  Deliverables:%d", n_deliverables)
+        logger.info("  Exclusions:  %d", n_excl)
+        logger.info("  Accuracy:    %.2f%%", acc_score)
         logger.info("=" * 60)
 
         # Write output
@@ -307,7 +298,7 @@ def _empty_result(output_path: Optional[str] = None) -> Dict[str, Any]:
     """Schema-compliant empty result."""
     result = {
         "technical_specifications": [],
-        "scope_of_work": {"tasks": [], "exclusions": []},
+        "scope_of_work": {"summary": "NOT_FOUND", "deliverables": [], "exclusions": [], "locations": [], "references": []},
         "accuracy_score": 0.0,
     }
     if output_path:
@@ -325,32 +316,116 @@ def main():
     )
     parser.add_argument("file", help="Path to tender document (PDF, DOCX, JPG, PNG)")
     parser.add_argument("--output", "-o", default=None, help="JSON output path (default: stdout)")
-    parser.add_argument("--verbose", "-v", action="store_true", help="Verbose logging")
-    parser.add_argument("--reindex", action="store_true", help="Force ChromaDB re-indexing")
+    parser.add_argument("--verbose", "-v", action="store_true",
+                        help="Show pipeline log messages alongside the progress bar")
+    parser.add_argument("--reindex", action="store_true", help="Force re-indexing of the vector store")
 
     args = parser.parse_args()
 
-    level = logging.DEBUG if args.verbose else logging.INFO
+    # Keep CLI output focused on the main progress bar.
+    os.environ.setdefault("TRANSFORMERS_VERBOSITY", "error")
+    os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+    os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+    # With -v show INFO from our own loggers; otherwise only hard errors.
+    app_level = logging.INFO if args.verbose else logging.ERROR
     logging.basicConfig(
-        level=level,
+        level=logging.WARNING,          # root logger quiet by default
         format="%(asctime)s | %(levelname)-7s | %(name)s | %(message)s",
         datefmt="%H:%M:%S",
+        stream=sys.stderr,
     )
+    logging.getLogger("tender_extraction").setLevel(app_level)
+
+    # Always silence noisy third-party debug loggers.
+    _SUPPRESS = ("pdfminer", "pdfplumber", "PIL", "urllib3", "httpx",
+                 "sentence_transformers", "transformers", "torch",
+                 "huggingface_hub", "filelock")
+    for _name in list(logging.Logger.manager.loggerDict.keys()):
+        if any(_name.startswith(p) for p in _SUPPRESS):
+            logging.getLogger(_name).setLevel(logging.ERROR)
+
+    try:
+        from transformers.utils import logging as _hf_logging
+        _hf_logging.set_verbosity_error()
+    except Exception:
+        pass
+
+    # Silence common HF warning spam so tqdm remains readable.
+    warnings.filterwarnings(
+        "ignore",
+        message=r"Warning: You are sending unauthenticated requests to the HF Hub.*",
+    )
+    warnings.filterwarnings("ignore", module=r"huggingface_hub\.utils\._http")
 
     pipeline = TenderExtractionPipeline(force_reindex=args.reindex)
 
     try:
-        result = pipeline.run(args.file, args.output)
-        if args.output is None:
+        from tqdm import tqdm as _tqdm
+        _has_tqdm = True
+    except ImportError:
+        _has_tqdm = False
+
+    try:
+        if _has_tqdm:
+            bar = _tqdm(
+                total=100,
+                desc="Starting",
+                unit="%",
+                ncols=80,
+                bar_format="{desc:<35} {percentage:3.0f}%|{bar}| {elapsed}<{remaining}",
+                file=sys.stderr,
+                colour="green",
+            )
+            _last = [0]
+
+            def _progress_cb(pct: int, msg: str):
+                inc = max(0, pct - _last[0])
+                if inc:
+                    bar.update(inc)
+                    _last[0] = pct
+                bar.set_description(msg[:33])
+
+            with open(os.devnull, "w", encoding="utf-8") as _sink:
+                with contextlib.redirect_stdout(_sink):
+                    result = pipeline.run(args.file, args.output, progress_callback=_progress_cb)
+
+            # Finish bar to 100%.
+            remaining = 100 - _last[0]
+            if remaining:
+                bar.update(remaining)
+            bar.set_description("Done")
+            bar.close()
+        else:
+            with open(os.devnull, "w", encoding="utf-8") as _sink:
+                with contextlib.redirect_stdout(_sink):
+                    result = pipeline.run(args.file, args.output)
+
+        # Print final summary to stderr so it appears after the bar.
+        final = result
+        n_specs = len(final.get("technical_specifications", []))
+        scope = final.get("scope_of_work", {})
+        n_del = len(scope.get("deliverables", []))
+        n_excl = len(scope.get("exclusions", []))
+        acc = final.get("accuracy_score", 0.0)
+        print(
+            f"\n  Specs: {n_specs}   Deliverables: {n_del}   Exclusions: {n_excl}   "
+            f"Accuracy: {acc:.1f}%",
+            file=sys.stderr,
+        )
+        if args.output:
+            print(f"  Output: {args.output}", file=sys.stderr)
+        else:
             print(json.dumps(result, indent=2, ensure_ascii=False))
+
     except FileNotFoundError as exc:
-        logger.error("File not found: %s", exc)
+        print(f"Error: File not found — {exc}", file=sys.stderr)
         sys.exit(1)
     except ValueError as exc:
-        logger.error("Invalid input: %s", exc)
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
     except RuntimeError as exc:
-        logger.error("Runtime error: %s", exc)
+        print(f"Error: {exc}", file=sys.stderr)
         sys.exit(1)
 
 

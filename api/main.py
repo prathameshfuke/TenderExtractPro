@@ -53,12 +53,12 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
                               progress_callback=progress_callback)
         
         specs = len(result.get("technical_specifications", []))
-        tasks = len(result.get("scope_of_work", {}).get("tasks", []))
+        deliverables = len(result.get("scope_of_work", {}).get("deliverables", []))
         
         job["progress"] = 100
         job["status"] = "done"
         job["result_path"] = output_path
-        job["message"] = f"Complete — {specs} specs, {tasks} tasks extracted"
+        job["message"] = f"Complete - {specs} specs, {deliverables} deliverables extracted"
         
     except Exception as e:
         jobs[job_id]["status"] = "error"

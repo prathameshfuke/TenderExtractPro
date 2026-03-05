@@ -76,8 +76,9 @@ def create_chunks(
         text = page_data["text"]
         is_ocr = page_data.get("is_ocr", False)
         chunk_type = "image_ocr" if is_ocr else "paragraph"
+        heading_hints = page_data.get("headings", [])   # from PyMuPDF
 
-        page_chunks = _chunk_text(text, page_num, chunk_type)
+        page_chunks = _chunk_text(text, page_num, chunk_type, heading_hints=heading_hints)
         chunks.extend(page_chunks)
 
     logger.info(
@@ -137,7 +138,12 @@ def _chunk_tables(tables: List[Dict[str, Any]]) -> List[Chunk]:
     return chunks
 
 
-def _chunk_text(text: str, page: int, chunk_type: str) -> List[Chunk]:
+def _chunk_text(
+    text: str,
+    page: int,
+    chunk_type: str,
+    heading_hints: Optional[List[str]] = None,
+) -> List[Chunk]:
     """
     Split page text into paragraph-level chunks with section awareness.
 
@@ -186,6 +192,9 @@ def _chunk_text(text: str, page: int, chunk_type: str) -> List[Chunk]:
 
         paragraph_buffer.clear()
 
+    # Build a set of heading strings from PyMuPDF for fast lookup
+    heading_set = set(heading_hints or [])
+
     for line in lines:
         stripped = line.strip()
         if not stripped:
@@ -193,8 +202,11 @@ def _chunk_text(text: str, page: int, chunk_type: str) -> List[Chunk]:
             _flush_paragraph()
             continue
 
-        # Check for section header
+        # Check for section header via numbered-section regex
         header_match = _SECTION_RE.match(stripped)
+        # Also recognise PyMuPDF-detected headings that don't have a number prefix
+        is_pymupdf_heading = (not header_match) and (stripped in heading_set)
+
         if header_match:
             _flush_paragraph()
 
@@ -205,8 +217,15 @@ def _chunk_text(text: str, page: int, chunk_type: str) -> List[Chunk]:
             parent_section, current_section = _resolve_hierarchy(
                 section_number, full_section, current_section, parent_section
             )
-            # Include section header in the next paragraph so the text
-            # starts with "3.2 Material Requirements\nSteel bars shall..."
+            paragraph_buffer.append(stripped)
+            continue
+
+        if is_pymupdf_heading:
+            # Unnumbered heading (e.g. "TECHNICAL SPECIFICATIONS" in large font) —
+            # flush and start a new section using the heading text itself.
+            _flush_paragraph()
+            current_section = stripped
+            parent_section = stripped
             paragraph_buffer.append(stripped)
             continue
 
@@ -244,14 +263,15 @@ def _resolve_hierarchy(
 
 def _split_by_tokens(text: str) -> List[str]:
     """
-    Split text into sub-chunks if it exceeds max_chunk_tokens.
+    Split text into sub-chunks up to max_chunk_tokens, with overlap.
 
-    We split on sentence boundaries (period + space) rather than at
-    exact token counts. This means chunks might be slightly over/under
-    the limit but at least sentences stay whole. A spec like "Steel bars
-    shall conform to IS 456" is useless if split after "Steel bars shall".
+    Overlap is implemented by repeating the last `overlap_tokens` worth
+    of sentences at the start of the next chunk so context is not lost
+    at chunk boundaries (e.g. a spec value sentence that follows a
+    header sentence in the previous chunk).
     """
     max_tokens = config.chunking.max_chunk_tokens
+    overlap_tokens = config.chunking.overlap_tokens
     token_count = _count_tokens(text)
 
     if token_count <= max_tokens:
@@ -266,8 +286,18 @@ def _split_by_tokens(text: str) -> List[str]:
         sent_tokens = _count_tokens(sentence)
         if current_count + sent_tokens > max_tokens and current:
             sub_chunks.append(" ".join(current))
-            current = [sentence]
-            current_count = sent_tokens
+            # Build overlap: walk back from the end of `current` collecting
+            # sentences until we have at least overlap_tokens worth.
+            overlap_sents: List[str] = []
+            overlap_count = 0
+            for s in reversed(current):
+                s_toks = _count_tokens(s)
+                if overlap_count + s_toks > overlap_tokens and overlap_sents:
+                    break
+                overlap_sents.insert(0, s)
+                overlap_count += s_toks
+            current = overlap_sents + [sentence]
+            current_count = overlap_count + sent_tokens
         else:
             current.append(sentence)
             current_count += sent_tokens

@@ -36,14 +36,18 @@ def verify_grounding(
     Returns a float 0.0 to 1.0 representing match quality.
     """
     exact_text = spec.get("source", {}).get("exact_text", "")
-    spec_text = spec.get("specification_text", "")
+    # New schema: component + specs dict.
+    # Primary grounding signal = exact_text (LLM should quote source verbatim).
+    # Use component name only as a fallback when exact_text is absent.
+    component = spec.get("component", "")
 
     # Collect distinct non-empty texts to check
     texts_to_check = []
     if exact_text and exact_text not in ("NOT_FOUND", ""):
         texts_to_check.append(exact_text)
-    if spec_text and spec_text not in ("NOT_FOUND", "") and spec_text not in texts_to_check:
-        texts_to_check.append(spec_text[:200])  # cap to 200 chars
+    elif component and component not in ("NOT_FOUND", ""):
+        # Fallback: use component name if no exact citation was provided
+        texts_to_check.append(component[:200])
 
     if not texts_to_check:
         return 0.0
@@ -52,7 +56,12 @@ def verify_grounding(
     for text_to_check in texts_to_check:
         for item in source_chunks:
             chunk: Chunk = item["chunk"]
-            ratio = fuzz.token_sort_ratio(
+            # partial_ratio finds the best matching *substring* in chunk.text —
+            # the right metric for verifying a short citation phrase exists
+            # inside a longer chunk. token_sort_ratio was wrong here: comparing
+            # sorted token sets of a 15-token citation vs a 500-token chunk
+            # always returns a near-zero overlap ratio and rejects valid extractions.
+            ratio = fuzz.partial_ratio(
                 text_to_check.lower().strip(),
                 chunk.text.lower().strip(),
             )
@@ -91,6 +100,7 @@ def validate_extractions(
     accepted_count = 0
 
     for spec in raw_specs:
+        spec = _normalize_spec_shape(spec)
         score = verify_grounding(spec, source_chunks)
         confidence = assign_confidence(score)
 
@@ -98,47 +108,52 @@ def validate_extractions(
             logger.warning(
                 "REJECTED spec '%s' (grounding=%.2f < threshold=%.2f). "
                 "Likely hallucination.",
-                spec.get("item_name", "?"), score, config.validation.min_grounding_ratio,
+                spec.get("component", "?"), score, config.validation.min_grounding_ratio,
             )
             continue
 
         total_score += score
         accepted_count += 1
-        spec["confidence"] = confidence
-        spec = _enforce_not_found(spec)
+        # Confidence is now a float (0.0–1.0); overwrite with actual grounding score
+        spec["confidence"] = round(score, 4)
         validated_specs.append(spec)
 
-    # Validate scope tasks (lighter check — just verify the chunk exists)
+    # Validate scope deliverables (plain strings in new schema)
     scope = extraction.get("scope_of_work", {})
-    validated_tasks: List[Dict[str, Any]] = []
-    for task in scope.get("tasks", []):
-        task_score = _verify_task_grounding(task, source_chunks)
+    validated_deliverables: List[str] = []
+    raw_deliverables = scope.get("deliverables", [])
+    for item in raw_deliverables:
+        if not isinstance(item, str) or not item.strip():
+            continue
+        task_score = _verify_deliverable_grounding(item, source_chunks)
         if task_score < config.validation.min_grounding_ratio - 1e-9:
             logger.warning(
-                "REJECTED task '%s' (grounding=%.2f)",
-                task.get("task_description", "?")[:60], task_score,
+                "REJECTED deliverable '%s' (grounding=%.2f)",
+                item[:60], task_score,
             )
             continue
         total_score += task_score
         accepted_count += 1
-        task = _enforce_not_found(task)
-        validated_tasks.append(task)
+        validated_deliverables.append(item)
 
-    validated_exclusions = scope.get("exclusions", [])
+    # Exclusions, locations, references are pass-through (no grounding check needed)
+    validated_exclusions = [e for e in scope.get("exclusions", []) if isinstance(e, str) and e.strip()]
+    validated_locations = [l for l in scope.get("locations", []) if isinstance(l, str) and l.strip()]
+    validated_references = [r for r in scope.get("references", []) if isinstance(r, str) and r.strip()]
 
     # Stats
     specs_rejected = len(raw_specs) - len(validated_specs)
-    tasks_rejected = len(scope.get("tasks", [])) - len(validated_tasks)
-    high_count = sum(1 for s in validated_specs if s.get("confidence") == "HIGH")
-    med_count = sum(1 for s in validated_specs if s.get("confidence") == "MEDIUM")
-    low_count = sum(1 for s in validated_specs if s.get("confidence") == "LOW")
+    deliverables_rejected = len(raw_deliverables) - len(validated_deliverables)
+    high_count = sum(1 for s in validated_specs if (s.get("confidence") or 0.0) >= config.validation.high_confidence_threshold)
+    med_count = sum(1 for s in validated_specs if config.validation.medium_confidence_threshold <= (s.get("confidence") or 0.0) < config.validation.high_confidence_threshold)
+    low_count = sum(1 for s in validated_specs if (s.get("confidence") or 0.0) < config.validation.medium_confidence_threshold)
 
     logger.info(
         "Validation: %d/%d specs passed (HIGH=%d, MEDIUM=%d, LOW=%d), "
-        "%d/%d tasks passed, %d rejected",
+        "%d/%d deliverables passed, %d rejected",
         len(validated_specs), len(raw_specs), high_count, med_count, low_count,
-        len(validated_tasks), len(scope.get("tasks", [])),
-        specs_rejected + tasks_rejected,
+        len(validated_deliverables), len(raw_deliverables),
+        specs_rejected + deliverables_rejected,
     )
 
     overall_accuracy = (total_score / accepted_count) if accepted_count > 0 else 0.0
@@ -146,11 +161,74 @@ def validate_extractions(
     return {
         "technical_specifications": validated_specs,
         "scope_of_work": {
-            "tasks": validated_tasks,
+            "summary": scope.get("summary", "NOT_FOUND"),
+            "deliverables": validated_deliverables,
             "exclusions": validated_exclusions,
+            "locations": validated_locations,
+            "references": validated_references,
         },
         "accuracy_score": round(overall_accuracy * 100, 2),
     }
+
+
+def _normalize_spec_shape(spec: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Backward-compatible normalization for mixed/legacy spec payloads.
+
+    Accepts old shape:
+      item_name, specification_text, unit, numeric_value, tolerance,
+      standard_reference, material
+
+    And converts to current shape:
+      component, specs (dict), source, confidence
+    """
+    if "component" in spec and isinstance(spec.get("specs"), dict):
+        return spec
+
+    component = str(spec.get("component") or spec.get("item_name") or "NOT_FOUND").strip()
+    if not component:
+        component = "NOT_FOUND"
+
+    specs_dict: Dict[str, str] = {}
+
+    # Carry over explicit dict if present.
+    if isinstance(spec.get("specs"), dict):
+        for k, v in spec.get("specs", {}).items():
+            if v is None:
+                continue
+            v_str = str(v).strip()
+            if v_str and v_str != "NOT_FOUND":
+                specs_dict[str(k)] = v_str
+
+    # Legacy fields -> specs dict entries.
+    legacy_pairs = [
+        ("specification", spec.get("specification_text")),
+        ("unit", spec.get("unit")),
+        ("numeric_value", spec.get("numeric_value")),
+        ("tolerance", spec.get("tolerance")),
+        ("standard_reference", spec.get("standard_reference")),
+        ("material", spec.get("material")),
+    ]
+    for key, value in legacy_pairs:
+        if value is None:
+            continue
+        value_str = str(value).strip()
+        if value_str and value_str != "NOT_FOUND":
+            specs_dict[key] = value_str
+
+    source = spec.get("source") if isinstance(spec.get("source"), dict) else {}
+    normalized = {
+        "component": component,
+        "specs": specs_dict,
+        "source": {
+            "chunk_id": source.get("chunk_id", "NOT_FOUND"),
+            "page": int(source.get("page", 0) or 0),
+            "clause": source.get("clause", "NOT_FOUND"),
+            "exact_text": source.get("exact_text", "NOT_FOUND"),
+        },
+        "confidence": float(spec.get("confidence", 0.5)) if isinstance(spec.get("confidence"), (int, float)) else 0.5,
+    }
+    return normalized
 
 
 def validate_schema(raw: Dict[str, Any]) -> ExtractionResult:
@@ -167,22 +245,19 @@ def validate_schema(raw: Dict[str, Any]) -> ExtractionResult:
         return ExtractionResult.parse_obj(raw)
 
 
-def _verify_task_grounding(
-    task: Dict[str, Any], source_chunks: List[Dict[str, Any]]
+def _verify_deliverable_grounding(
+    deliverable: str, source_chunks: List[Dict[str, Any]]
 ) -> float:
-    """Lighter grounding check for scope tasks."""
-    desc = task.get("task_description", "")
-    exact = task.get("source", {}).get("exact_text", desc)
-    text_to_check = exact if exact and exact != "NOT_FOUND" else desc
-
+    """Lighter grounding check for plain-string scope deliverables."""
+    text_to_check = deliverable.strip()
     if not text_to_check:
         return 0.0
 
     best = 0.0
     for item in source_chunks:
         chunk: Chunk = item["chunk"]
-        ratio = fuzz.token_sort_ratio(
-            text_to_check.lower().strip(),
+        ratio = fuzz.partial_ratio(
+            text_to_check.lower(),
             chunk.text.lower().strip(),
         ) / 100.0
         if ratio > best:
@@ -191,16 +266,10 @@ def _verify_task_grounding(
 
 
 def _enforce_not_found(data: Dict[str, Any]) -> Dict[str, Any]:
-    """Replace None/empty string values with 'NOT_FOUND' for consistency."""
-    FIELDS = {
-        "unit", "numeric_value", "tolerance", "standard_reference", "material",
-        "timeline", "responsible_party",
-    }
-    for field in FIELDS:
-        if field in data:
-            val = data[field]
-            if val is None or (isinstance(val, str) and not val.strip()):
-                data[field] = "NOT_FOUND"
+    """Replace None/empty string values with 'NOT_FOUND' for string fields."""
+    for key, val in data.items():
+        if isinstance(val, str) and not val.strip():
+            data[key] = "NOT_FOUND"
     return data
 
 

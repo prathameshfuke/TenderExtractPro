@@ -1,10 +1,17 @@
 """
-ingestion.py — Multi-format document loading with OCR fallback.
+ingestion.py — Multi-format document loading with PyMuPDF + OCR fallback.
 
-Handles document parsing across various file formats. Uses
-pdfplumber for standard PDFs and falls back to pdf2image + pytesseract 
-for scanned components. Employs a character-density heuristic to 
-detect scanned pages automatically.
+Parser priority:
+  1. PyMuPDF (fitz) — layout-aware extraction with per-block font/size metadata
+     used for heading detection in the chunker.
+  2. pdfplumber — fallback when fitz is unavailable or fails.
+  3. pdf2image + pytesseract — OCR for pages with too little extracted text.
+
+Each returned page dict includes:
+  page     : int  (1-based)
+  text     : str  (full page text)
+  is_ocr   : bool
+  headings : List[str]  (lines detected as headings via font-size heuristic)
 """
 
 from __future__ import annotations
@@ -14,7 +21,6 @@ from pathlib import Path
 from typing import Any, Dict, List
 import concurrent.futures
 
-import pdfplumber
 from PIL import Image, ImageEnhance, ImageFilter
 
 from tender_extraction.config import config
@@ -26,15 +32,9 @@ def ingest_document(file_path: str) -> List[Dict[str, Any]]:
     """
     Load a document and return a list of page-level dicts.
 
-    Each dict has: page (int, 1-based), text (str), is_ocr (bool).
-
-    We return a flat list regardless of format so downstream modules
-    don't need format-specific branching. DOCX gets treated as page 1,
-    images as page 1, multi-page PDFs get one entry per page.
-
-    Raises:
-        ValueError: Unsupported format or file too large.
-        FileNotFoundError: Self-explanatory.
+    Each dict: {page, text, is_ocr, headings}.
+    `headings` is a list of heading strings detected on the page (used
+    by the chunker for section-boundary detection).
     """
     path = Path(file_path)
     _validate_file(path)
@@ -50,68 +50,136 @@ def ingest_document(file_path: str) -> List[Dict[str, Any]]:
         raise ValueError(f"Unsupported format: {suffix}")
 
 
+def _ingest_pdf_pymupdf(path: Path) -> List[Dict[str, Any]]:
+    """
+    Primary PDF extractor: uses PyMuPDF (fitz) for layout-aware text extraction.
+
+    Returns one dict per page with `headings` populated via a font-size
+    heuristic: any text span with font-size > 12pt or bold flag set is
+    treated as a heading.  The chunker uses this to detect section
+    boundaries without relying solely on the numbered-section regex.
+    """
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        logger.warning("PyMuPDF (fitz) not installed. Falling back to pdfplumber.")
+        return []
+
+    pages: List[Dict[str, Any]] = []
+    try:
+        doc = fitz.open(str(path))
+        logger.info("PyMuPDF: opening %s (%d pages)", path.name, len(doc))
+
+        for page_idx in range(len(doc)):
+            page = doc[page_idx]
+            blocks = page.get_text("dict", flags=fitz.TEXT_PRESERVE_WHITESPACE)["blocks"]
+
+            text_parts: List[str] = []
+            headings: List[str] = []
+
+            for block in blocks:
+                if block.get("type") != 0:   # type 0 = text
+                    continue
+                for line in block.get("lines", []):
+                    for span in line.get("spans", []):
+                        span_text = span.get("text", "").strip()
+                        if not span_text:
+                            continue
+                        text_parts.append(span_text)
+                        font_size = span.get("size", 0)
+                        flags = span.get("flags", 0)
+                        is_bold = bool(flags & 2**4)   # bit 4 = bold in PDF
+                        # Heading heuristic: larger font or bold AND not a very
+                        # long line (long bold lines are usually table headers).
+                        if (font_size > 12 or is_bold) and len(span_text) < 150:
+                            headings.append(span_text)
+
+            full_text = "\n".join(text_parts)
+            pages.append({
+                "page": page_idx + 1,
+                "text": full_text,
+                "is_ocr": False,
+                "headings": headings,
+            })
+
+        doc.close()
+        logger.info("PyMuPDF: extracted %d pages from %s", len(pages), path.name)
+        return pages
+
+    except Exception as exc:
+        logger.warning("PyMuPDF extraction failed (%s), falling back to pdfplumber.", exc)
+        return []
+
+
 def _process_pdf_page(path: Path, idx: int, text: str, total_pages: int) -> Dict[str, Any]:
-    """Helper function to process a single PDF page."""
+    """Process a single PDF page: OCR if too few chars were extracted."""
     if len(text.strip()) < config.ocr.scanned_char_threshold:
-        # Page is likely scanned. OCR it.
         logger.info(
-            f"Page {idx}/{total_pages}: only {len(text.strip())} chars detected, "
-            f"treating as scanned and applying OCR"
+            "Page %d/%d: %d chars — treating as scanned, applying OCR",
+            idx, total_pages, len(text.strip()),
         )
         ocr_text = _ocr_pdf_page(path, idx)
-        return {"page": idx, "text": ocr_text, "is_ocr": True}
-    else:
-        return {"page": idx, "text": text, "is_ocr": False}
+        return {"page": idx, "text": ocr_text, "is_ocr": True, "headings": []}
+    return {"page": idx, "text": text, "is_ocr": False, "headings": []}
 
 
 def _ingest_pdf(path: Path) -> List[Dict[str, Any]]:
     """
-    Process a PDF page-by-page, deciding text extraction vs OCR per page.
-
-    Pages that require OCR are dispatched to a ProcessPoolExecutor to be
-    processed in parallel, drastically speeding up ingestion of large scanned
-    documents.
+    PDF ingestion pipeline:
+      1. Try PyMuPDF for layout-aware extraction (populates `headings`).
+      2. Fall back to pdfplumber for pages where PyMuPDF fails.
+      3. OCR any page with fewer than `scanned_char_threshold` characters.
     """
-    pages: List[Dict[str, Any]] = []
-    
-    # First, quickly extract all raw text using pdfplumber sequentially
-    # This is fast and I/O bound
+    # -- Step 1: PyMuPDF primary extraction ----------------------------------
+    pymupdf_pages = _ingest_pdf_pymupdf(path)
+
+    if pymupdf_pages:
+        # Check page-by-page for OCR need; PyMuPDF may still miss scanned pages
+        final_pages: List[Dict[str, Any]] = []
+        total = len(pymupdf_pages)
+        logger.info("Checking %d pages for OCR need...", total)
+        for p in pymupdf_pages:
+            if len(p["text"].strip()) < config.ocr.scanned_char_threshold:
+                logger.info("Page %d needs OCR (only %d chars).", p["page"], len(p["text"].strip()))
+                ocr_text = _ocr_pdf_page(path, p["page"])
+                final_pages.append({
+                    "page": p["page"], "text": ocr_text,
+                    "is_ocr": True, "headings": p["headings"],
+                })
+            else:
+                final_pages.append(p)
+        logger.info(
+            "Ingested %s: %d pages (%d OCR) via PyMuPDF",
+            path.name, len(final_pages),
+            sum(1 for p in final_pages if p["is_ocr"]),
+        )
+        return final_pages
+
+    # -- Step 2: pdfplumber fallback -----------------------------------------
+    logger.info("Using pdfplumber for %s", path.name)
+    import pdfplumber
     raw_pages_data = []
     with pdfplumber.open(str(path)) as pdf:
         total_pages = len(pdf.pages)
-        logger.info("Opening PDF: %s (%d pages)", path.name, total_pages)
+        logger.info("pdfplumber: opening %s (%d pages)", path.name, total_pages)
         for idx, page in enumerate(pdf.pages, start=1):
             text = page.extract_text() or ""
             raw_pages_data.append((path, idx, text, total_pages))
-    
-    # Now process pages (which may trigger slow OCR) in parallel
-    logger.info("Processing %d pages with max_workers=%d", total_pages, config.ocr.max_workers)
-    
-    # ThreadPoolExecutor is safer than ProcessPoolExecutor on Windows:
-    # - Avoids spawn-based multiprocessing issues in the API server context
-    # - OCR (pytesseract / Pillow) releases the GIL, so threads get real parallelism
-    # - Avoids numpy/MSVC ABI crash when spawning child processes
+
     with concurrent.futures.ThreadPoolExecutor(max_workers=config.ocr.max_workers) as executor:
-        # Submit all tasks
         futures = {executor.submit(_process_pdf_page, *data): data for data in raw_pages_data}
-        
-        # Collect results as they complete
-        completed_pages = []
+        completed: List[Dict[str, Any]] = []
         for future in concurrent.futures.as_completed(futures):
             try:
-                page_result = future.result()
-                completed_pages.append(page_result)
+                completed.append(future.result())
             except Exception as exc:
                 data = futures[future]
-                page_idx = data[1]
-                logger.error("Failed to process page %d: %s", page_idx, exc)
-                completed_pages.append({"page": page_idx, "text": "", "is_ocr": False})
-                
-    # Sort pages by page number since they might complete out of order
-    pages = sorted(completed_pages, key=lambda p: p["page"])
+                logger.error("Page %d processing failed: %s", data[1], exc)
+                completed.append({"page": data[1], "text": "", "is_ocr": False, "headings": []})
 
+    pages = sorted(completed, key=lambda p: p["page"])
     logger.info(
-        "Ingested %s: %d pages (%d text, %d OCR)",
+        "Ingested %s: %d pages (%d text, %d OCR) via pdfplumber",
         path.name,
         len(pages),
         sum(1 for p in pages if not p["is_ocr"]),
@@ -186,7 +254,7 @@ def _ingest_docx(path: Path) -> List[Dict[str, Any]]:
 
     full_text = "\n".join(parts)
     logger.info("Ingested DOCX: %s (%d text blocks)", path.name, len(parts))
-    return [{"page": 1, "text": full_text, "is_ocr": False}]
+    return [{"page": 1, "text": full_text, "is_ocr": False, "headings": []}]
 
 
 def _ingest_image(path: Path) -> List[Dict[str, Any]]:
@@ -195,7 +263,7 @@ def _ingest_image(path: Path) -> List[Dict[str, Any]]:
     img = _preprocess_image(img)
     text = _ocr_image(img)
     logger.info("Ingested image: %s (%d chars via OCR)", path.name, len(text))
-    return [{"page": 1, "text": text, "is_ocr": True}]
+    return [{"page": 1, "text": text, "is_ocr": True, "headings": []}]
 
 
 def _preprocess_image(img: Image.Image) -> Image.Image:

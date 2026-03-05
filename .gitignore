@@ -1,2 +1,20 @@
 
 models/
+
+# Python virtual environments
+venv/
+venv312/
+.venv/
+
+# Python cache/build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Frontend build artifacts
+frontend/dist/
+frontend/node_modules/

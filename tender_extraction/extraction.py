@@ -1,4 +1,4 @@
-"""
+﻿"""
 extraction.py -- Real LLM-powered extraction via llama-cpp-python.
 
 Anti-hallucination strategy:
@@ -17,6 +17,7 @@ import re
 import time
 import threading
 import sys
+import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -37,17 +38,125 @@ _USER_OPEN = "<|user|>"
 _ASST_OPEN = "<|assistant|>"
 _EOS = "</s>"
 
-_SPEC_SYSTEM = 'You are a precise JSON extraction API for tender documents. You MUST respond with ONLY a valid JSON object. No markdown. No explanation. No text before or after the JSON.\nCRITICAL RULES:\n1. NEVER invent, assume, or calculate values\n2. ONLY extract what is EXPLICITLY written in the provided text\n3. Use "NOT_FOUND" for ANY field not explicitly stated in the text\n4. Copy exact phrases from the document for specification_text and source.exact_text'
+_SPEC_SYSTEM = (
+    "You are a tender parsing assistant. "
+    "You MUST respond with ONLY a valid JSON object. No markdown, no explanation, no text before or after the JSON.\n"
+    "CRITICAL RULES:\n"
+    "1. NEVER invent, assume, or calculate values.\n"
+    "2. ONLY extract what is EXPLICITLY written in the provided text.\n"
+    '3. Include units inside the value string (e.g. "32 GB", "10 Gbps", "3.2 COP").\n'
+    '4. If a value has no unit written, include it as-is and set confidence below 0.6.\n'
+    '5. Copy exact phrases from the document into source.exact_text.'
+)
 
-_SPEC_FEW_SHOT = 'EXAMPLE INPUT:\n"Steel reinforcement bars shall be Grade 60 conforming to ASTM A615. Minimum yield strength 420 MPa. Tolerance +/- 2%."\n\nEXAMPLE OUTPUT:\n{"technical_specifications": [{"item_name": "Steel Reinforcement Bars", "specification_text": "Steel reinforcement bars shall be Grade 60 conforming to ASTM A615. Minimum yield strength 420 MPa.", "unit": "MPa", "numeric_value": "420", "tolerance": "+/- 2%", "standard_reference": "ASTM A615", "material": "Steel Grade 60", "source": {"page": 15, "exact_text": "Steel reinforcement bars shall be Grade 60"}, "confidence": "HIGH"}]}'
+_SPEC_FEW_SHOT = (
+    'EXAMPLE INPUT:\n'
+    '"HVAC Unit: capacity 10 TR, power supply 415 V 3-phase 50 Hz, '
+    'minimum COP 3.2, refrigerant R-410A, conforming to IS 1391."\n\n'
+    'EXAMPLE OUTPUT:\n'
+    '{"technical_specifications": [{'
+    '"component": "HVAC Unit", '
+    '"specs": {"capacity": "10 TR", "power_supply": "415 V 3-phase 50 Hz", '
+    '"cop_minimum": "3.2", "refrigerant": "R-410A", "standard": "IS 1391"}, '
+    '"source": {"page": 5, "clause": "3.2", '
+    '"exact_text": "HVAC Unit: capacity 10 TR, power supply 415 V"}, '
+    '"confidence": 0.94}]}'
+)
 
-_SPEC_INSTRUCTIONS = 'First, carefully read ALL the tender text chunks below. Then, identify every technical specification mentioned. Finally, format them as a JSON object.\n\n{few_shot}\n\nNow extract ALL technical specifications from this tender text. Return a JSON object with key "technical_specifications" containing an array.\n\nEach specification object must have these exact keys:\n- item_name: descriptive name of the component or parameter (string, min 5 chars)\n- specification_text: the full requirement as stated in the document (string, min 20 chars, copy verbatim)\n- unit: unit of measurement, or "NOT_FOUND"\n- numeric_value: numeric quantity as string, or "NOT_FOUND"\n- tolerance: tolerance value, or "NOT_FOUND"\n- standard_reference: standard code like IS/ASTM/ISO, or "NOT_FOUND"\n- material: material type, or "NOT_FOUND"\n- source: object with "page" (integer) and "exact_text" (short verbatim phrase from document)\n- confidence: "HIGH"\n\nIMPORTANT: If a value like unit, tolerance, or material is NOT explicitly written in the text, you MUST use "NOT_FOUND". Do NOT guess or infer.\n\nTENDER TEXT:\n{context}'
+_SPEC_INSTRUCTIONS = (
+    "Read ALL tender text chunks below. Identify EVERY technical specification.\n\n"
+    "{few_shot}\n\n"
+    'Return a JSON object with key "technical_specifications" containing an array.\n\n'
+    "Each object MUST have these exact keys:\n"
+    "- component: name of the part, system, or material (string)\n"
+    '- specs: flat dict of parameter name to value-with-units '
+    '(e.g. {"capacity": "10 TR", "voltage": "415 V"})\n'
+    '- source: object with "page" (int), "clause" (string or "NOT_FOUND"), '
+    '"exact_text" (verbatim phrase from the text)\n'
+    '- confidence: float 0 to 1 (use below 0.6 when unit is missing or value is ambiguous)\n\n'
+    "For tables: parse each row into a separate object.\n"
+    "TENDER TEXT:\n{context}"
+)
 
-_SCOPE_SYSTEM = 'You are a precise JSON extraction API. Respond with ONLY a valid JSON object. No markdown. No explanation.'
+_SCOPE_SYSTEM = (
+    "You are a tender parsing assistant. "
+    "Respond with ONLY a valid JSON object. No markdown. No explanation."
+)
 
-_SCOPE_FEW_SHOT = 'EXAMPLE INPUT:\n"The contractor shall perform site preparation, supply and install all equipment, and commission the system within 90 days. Civil work is excluded from vendor scope."\n\nEXAMPLE OUTPUT:\n{"scope_of_work": {"tasks": [{"task_description": "Site preparation", "responsible_party": "Contractor", "timeline": "NOT_FOUND"}, {"task_description": "Supply and install all equipment", "responsible_party": "Contractor", "timeline": "NOT_FOUND"}, {"task_description": "Commission the system", "responsible_party": "Contractor", "timeline": "90 days"}], "exclusions": [{"exclusion_description": "Civil work is excluded from vendor scope"}]}}'
+_SCOPE_FEW_SHOT = (
+    'EXAMPLE INPUT:\n'
+    '"The contractor shall perform site preparation, supply and install all equipment '
+    'at Building A, and commission the system within 90 days. '
+    'Civil work is excluded from vendor scope. Ref: Clause 2."\n\n'
+    'EXAMPLE OUTPUT:\n'
+    '{"scope_of_work": {'
+    '"summary": "Site preparation, supply, installation and commissioning of equipment at Building A within 90 days.", '
+    '"deliverables": ["Site preparation", "Supply and install all equipment", "Commission the system"], '
+    '"exclusions": ["Civil work is excluded from vendor scope"], '
+    '"locations": ["Building A"], '
+    '"references": ["Clause 2"]}}'
+)
 
-_SCOPE_INSTRUCTIONS = 'Extract the scope of work from this tender text.\n\n{few_shot}\n\nReturn a JSON object with key "scope_of_work" containing:\n- "tasks": array of task objects with keys: task_description, responsible_party (or "NOT_FOUND"), timeline (or "NOT_FOUND")\n- "exclusions": array of objects with key: exclusion_description\n\nOnly include items EXPLICITLY stated. Use "NOT_FOUND" for missing sub-fields.\n\nTENDER TEXT:\n{context}'
+_SCOPE_INSTRUCTIONS = (
+    "Extract the scope of work from this tender text.\n\n"
+    "{few_shot}\n\n"
+    'Return a JSON object with key "scope_of_work" containing:\n'
+    '- "summary": concise description max 120 words (string)\n'
+    '- "deliverables": list of deliverable strings\n'
+    '- "exclusions": list of items explicitly NOT in scope\n'
+    '- "locations": site or building locations mentioned\n'
+    '- "references": clause and page references cited\n\n'
+    "Only include items EXPLICITLY stated. Return empty lists for missing sections.\n\n"
+    "TENDER TEXT:\n{context}"
+)
+
+
+def _count_tokens(text: str) -> int:
+    """Estimate token count for context budget calculations."""
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding(config.chunking.tiktoken_model)
+        return len(enc.encode(text))
+    except Exception:
+        return max(1, len(text) // 4)
+
+
+# Available token budget for context in each LLM call:
+#   n_ctx - max_tokens_output - fixed_prompt_overhead (system+instructions+few-shot+tags)
+_PROMPT_OVERHEAD_TOKENS = 750
+_CONTEXT_BUDGET = config.llm.n_ctx - config.llm.max_tokens - _PROMPT_OVERHEAD_TOKENS
+
+
+def _split_into_batches(
+    retrieved_chunks: List[Dict[str, Any]],
+    budget: int = _CONTEXT_BUDGET,
+) -> List[List[Dict[str, Any]]]:
+    """
+    Split retrieved chunks into context-budget-sized batches so each
+    LLM call stays within the model's context window.
+
+    With n_ctx=4096 and max_tokens=1024, _CONTEXT_BUDGET â‰ˆ 2322 tokens.
+    Average chunk is ~350 tokens, so each batch holds ~6 chunks.
+    30 spec chunks â†’ ~5 LLM calls whose results are merged.
+    """
+    batches: List[List[Dict[str, Any]]] = []
+    current_batch: List[Dict[str, Any]] = []
+    current_tokens = 0
+
+    for item in retrieved_chunks:
+        chunk_tokens = _count_tokens(item["chunk"].text)
+        if current_tokens + chunk_tokens > budget and current_batch:
+            batches.append(current_batch)
+            current_batch = [item]
+            current_tokens = chunk_tokens
+        else:
+            current_batch.append(item)
+            current_tokens += chunk_tokens
+
+    if current_batch:
+        batches.append(current_batch)
+
+    return batches
 
 
 class LLMProgressIndicator:
@@ -97,7 +206,8 @@ def load_model():
         if _llm_instance is not None:
             return _llm_instance
 
-        from llama_cpp import Llama
+        _prepare_llama_dll_paths()
+        from llama_cpp import Llama, llama_cpp
 
         model_path = config.llm.model_path
         if not Path(model_path).exists():
@@ -109,7 +219,18 @@ def load_model():
                 f"See SETUP.md for detailed instructions."
             )
 
+        gpu_supported = False
+        try:
+            gpu_supported = bool(llama_cpp.llama_supports_gpu_offload())
+        except Exception:
+            gpu_supported = False
+
         logger.info("Loading LLM: %s", model_path)
+        logger.info("llama.cpp GPU offload support: %s", gpu_supported)
+        if not gpu_supported:
+            logger.warning(
+                "GPU offload is not available in the current Python environment; running on CPU."
+            )
         _llm_instance = Llama(
             model_path=model_path,
             n_ctx=config.llm.n_ctx,
@@ -121,34 +242,61 @@ def load_model():
 
     return _llm_instance
 
-def _get_json_grammar():
+
+def _prepare_llama_dll_paths() -> None:
+    """Register DLL search paths for llama-cpp and CUDA runtime on Windows.
+
+    Keeps all runtime dependencies inside the active venv (project-local).
+    Safe no-op on non-Windows platforms.
+    """
+    if os.name != "nt":
+        return
+
     try:
-        from llama_cpp import LlamaGrammar
-        # Strict JSON grammar to enforce valid output from the LLM.
-        # Uses GBNF (GGML BNF) syntax — no inline # comments allowed.
-        # The {4} quantifier requires llama.cpp >= b1700; if it fails we
-        # fall back gracefully by returning None (no grammar constraint).
-        prompt_grammar = r"""
-            root   ::= object
-            value  ::= object | array | string | number | "true" | "false" | "null"
-            object ::=
-            "{" ws "}"
-            | "{" ws string ws ":" ws value ws ("," ws string ws ":" ws value ws)* "}"
-            array  ::=
-            "[" ws "]"
-            | "[" ws value ws ("," ws value ws)* "]"
-            string ::=
-            "\"" (
-                [^"\\\x7F\x00-\x1F] |
-                "\\" (["\\/bfnrt] | "u" [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F] [0-9a-fA-F])
-            )* "\""
-            number ::= "-"? ("0" | [1-9] [0-9]*) ("." [0-9]+)? ([eE] [-+]? [0-9]+)?
-            ws     ::= ([ \t\n] ws)?
-        """
-        return LlamaGrammar.from_string(prompt_grammar)
-    except Exception as exc:
-        logger.warning("Failed to load JSON grammar: %s. Proceeding without grammar.", exc)
-        return None
+        import ctypes
+        import site
+        base_candidates = []
+        for p in site.getsitepackages():
+            if os.path.isdir(p):
+                base_candidates.append(p)
+        # Fallback when site.getsitepackages() is unusual.
+        base_candidates.append(os.path.join(sys.prefix, "Lib", "site-packages"))
+
+        loaded_any = False
+        llama_lib_dir = None
+        for base in base_candidates:
+            for rel in (
+                os.path.join("llama_cpp", "lib"),
+                os.path.join("nvidia", "cublas", "bin"),
+                os.path.join("nvidia", "cuda_runtime", "bin"),
+                os.path.join("nvidia", "cuda_nvrtc", "bin"),
+            ):
+                dll_dir = os.path.join(base, rel)
+                if os.path.isdir(dll_dir):
+                    os.add_dll_directory(dll_dir)
+                    loaded_any = True
+                    if rel == os.path.join("llama_cpp", "lib"):
+                        llama_lib_dir = dll_dir
+
+        # Some Windows setups still fail lazy dependency discovery during import.
+        # Preload the native chain explicitly when available.
+        if loaded_any and llama_lib_dir and os.path.isdir(llama_lib_dir):
+            for dll_name in ("ggml-base.dll", "ggml-cpu.dll", "ggml-cuda.dll", "ggml.dll", "llama.dll"):
+                dll_path = os.path.join(llama_lib_dir, dll_name)
+                if os.path.isfile(dll_path):
+                    try:
+                        ctypes.CDLL(dll_path)
+                    except Exception:
+                        pass
+    except Exception:
+        # If this fails, llama-cpp import will surface the real dependency error.
+        pass
+
+def _get_json_grammar():
+    # Grammar mode caused parser crashes/access violations on some llama-cpp
+    # Windows builds. We keep generation stable by disabling grammar and using
+    # robust JSON repair + parsing downstream.
+    return None
 
 
 def _repair_json(raw: str) -> str:
@@ -167,7 +315,7 @@ def _repair_json(raw: str) -> str:
     raw = re.sub(r"^```(?:json)?\s*", "", raw.strip(), flags=re.IGNORECASE)
     raw = re.sub(r"\s*```\s*$", "", raw.strip())
 
-    # Find the first '{' and last '}' — extract the outermost object
+    # Find the first '{' and last '}' â€” extract the outermost object
     start = raw.find("{")
     end = raw.rfind("}")
     if start != -1 and end != -1 and end > start:
@@ -198,64 +346,110 @@ def extract_specifications(
     retrieved_chunks: List[Dict[str, Any]],
     topic: str = "",
 ) -> List[Dict[str, Any]]:
-    """Extract technical specifications from retrieved chunks using the LLM with Grammar enforcement."""
-    llm = load_model()
-    context = _build_context(retrieved_chunks)
-    prompt = build_spec_prompt(context, topic)
+    """
+    Extract technical specifications from retrieved chunks.
 
+    Splits chunks into context-budget-sized batches so the LLM never
+    receives more tokens than its context window can hold.  Results from
+    all batches are merged and deduplicated by component name.
+    """
+    llm = load_model()
     grammar = _get_json_grammar()
-    raw = _call_llm(llm, prompt, "Phi-3 extracting specifications", grammar)
-    repaired = _repair_json(raw)
-    
-    try:
-        parsed = json.loads(repaired)
-        specs = parsed.get("technical_specifications", [])
-        if not isinstance(specs, list):
-            logger.warning("Unexpected specs type: %s", type(specs))
-            return []
-        logger.info("LLM extracted %d specifications.", len(specs))
-        return specs
-    except json.JSONDecodeError as exc:
-        logger.error("LLM failed to produce valid JSON specs: %s\nRaw (first 500): %s",
-                     exc, raw[:500])
-        return []
+    batches = _split_into_batches(retrieved_chunks)
+
+    all_specs: List[Dict[str, Any]] = []
+    for batch_idx, batch in enumerate(batches):
+        logger.info(
+            "Spec extraction batch %d/%d (%d chunks, ~%d tokens)",
+            batch_idx + 1, len(batches), len(batch),
+            sum(_count_tokens(x["chunk"].text) for x in batch),
+        )
+        context = _build_context(batch)
+        prompt = build_spec_prompt(context, topic)
+        raw = _call_llm(
+            llm, prompt, f"Extracting specs (batch {batch_idx+1}/{len(batches)})", grammar
+        )
+        repaired = _repair_json(raw)
+        try:
+            parsed = json.loads(repaired)
+            specs = parsed.get("technical_specifications", [])
+            if isinstance(specs, list):
+                all_specs.extend(specs)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Spec batch %d JSON parse error: %s\nRaw (first 400): %s",
+                batch_idx + 1, exc, raw[:400],
+            )
+
+    # Deduplicate by component name (case-insensitive)
+    seen: set = set()
+    deduped: List[Dict[str, Any]] = []
+    for s in all_specs:
+        key = (s.get("component") or "").strip().lower()
+        if key and key not in seen:
+            seen.add(key)
+            deduped.append(s)
+        elif not key:
+            deduped.append(s)   # keep unnamed specs (may have useful specs dict)
+
+    logger.info(
+        "Extracted %d specs total across %d batches (%d after dedup)",
+        len(all_specs), len(batches), len(deduped),
+    )
+    return deduped
 
 
 def extract_scope_of_work(
     retrieved_chunks: List[Dict[str, Any]],
     topic: str = "",
 ) -> Dict[str, Any]:
-    """Extract scope-of-work from retrieved chunks using the LLM with Grammar enforcement."""
+    """
+    Extract scope-of-work from retrieved chunks.
+
+    Uses the first batch that yields a non-empty result; if the first
+    batch misses things, merge deliverables/exclusions from all batches.
+    """
+    empty = {"summary": "", "deliverables": [], "exclusions": [], "locations": [], "references": []}
     llm = load_model()
-    context = _build_context(retrieved_chunks)
-    prompt = build_scope_prompt(context, topic)
-    
     grammar = _get_json_grammar()
-    raw = _call_llm(llm, prompt, "Phi-3 extracting scope of work", grammar)
-    repaired = _repair_json(raw)
-    
-    try:
-        parsed = json.loads(repaired)
-    except json.JSONDecodeError as exc:
-        logger.error("Scope extraction failed to produce valid JSON: %s\nRaw (first 500): %s",
-                     exc, raw[:500])
-        return {"tasks": [], "exclusions": []}
+    batches = _split_into_batches(retrieved_chunks)
 
-    if isinstance(parsed, list):
-        parsed = {"scope_of_work": {"tasks": parsed, "exclusions": []}}
+    merged = dict(empty)
+    for batch_idx, batch in enumerate(batches):
+        logger.info(
+            "Scope extraction batch %d/%d (%d chunks)",
+            batch_idx + 1, len(batches), len(batch),
+        )
+        context = _build_context(batch)
+        prompt = build_scope_prompt(context, topic)
+        raw = _call_llm(
+            llm, prompt, f"Extracting scope (batch {batch_idx+1}/{len(batches)})", grammar
+        )
+        repaired = _repair_json(raw)
+        try:
+            parsed = json.loads(repaired)
+        except json.JSONDecodeError as exc:
+            logger.error(
+                "Scope batch %d JSON parse error: %s\nRaw (first 400): %s",
+                batch_idx + 1, exc, raw[:400],
+            )
+            continue
 
-    scope = parsed.get("scope_of_work", parsed)
+        scope = parsed.get("scope_of_work", parsed)
+        if not isinstance(scope, dict):
+            continue
 
-    if isinstance(scope, list):
-        scope = {"tasks": scope, "exclusions": []}
+        # Merge: take first non-empty summary; extend lists
+        if not merged["summary"] and scope.get("summary"):
+            merged["summary"] = scope["summary"]
+        for key in ("deliverables", "exclusions", "locations", "references"):
+            items = scope.get(key, [])
+            if isinstance(items, list):
+                for item in items:
+                    if item and item not in merged[key]:
+                        merged[key].append(item)
 
-    if not isinstance(scope, dict):
-        scope = {"tasks": [], "exclusions": []}
-
-    return {
-        "tasks": scope.get("tasks", []),
-        "exclusions": scope.get("exclusions", [])
-    }
+    return merged
 
 
 # -- Prompt builders -------------------------------------------------------
@@ -265,9 +459,9 @@ def build_spec_prompt(context: str, topic: str = "") -> str:
     if topic:
         topic_hint = "This tender is for: " + topic + "\n\n"
 
-    user_msg = topic_hint + _SPEC_INSTRUCTIONS.format(
-        few_shot=_SPEC_FEW_SHOT, context=context
-    )
+    # Use explicit placeholder replacement so JSON braces inside few-shot
+    # examples are treated literally (avoid str.format KeyError like "capacity").
+    user_msg = topic_hint + _SPEC_INSTRUCTIONS.replace("{few_shot}", _SPEC_FEW_SHOT).replace("{context}", context)
 
     return (
         _SYS_OPEN + "\n" + _SPEC_SYSTEM + _TAG_END + "\n"
@@ -281,9 +475,7 @@ def build_scope_prompt(context: str, topic: str = "") -> str:
     if topic:
         topic_hint = "This tender is for: " + topic + "\n\n"
 
-    user_msg = topic_hint + _SCOPE_INSTRUCTIONS.format(
-        few_shot=_SCOPE_FEW_SHOT, context=context
-    )
+    user_msg = topic_hint + _SCOPE_INSTRUCTIONS.replace("{few_shot}", _SCOPE_FEW_SHOT).replace("{context}", context)
 
     return (
         _SYS_OPEN + "\n" + _SCOPE_SYSTEM + _TAG_END + "\n"
@@ -325,7 +517,7 @@ def _build_context(retrieved_chunks: List[Dict[str, Any]]) -> str:
             if current_section and current_section not in ("Unknown", "Table"):
                 parts.append(f"\n[Section: {meta.section}]")
 
-        # Compact page marker — saves ~20 tokens per chunk vs the old format
+        # Compact page marker â€” saves ~20 tokens per chunk vs the old format
         page_tag = f"[p.{meta.page}]" if meta.chunk_type != "table" else f"[TABLE p.{meta.page}]"
         parts.append(f"{page_tag} {chunk.text}")
 
@@ -387,7 +579,7 @@ def _call_llm(llm, prompt: str, progress_message: str = "LLM generating", gramma
                         temperature=config.llm.temperature,
                         top_p=config.llm.top_p,
                         repeat_penalty=config.llm.repeat_penalty,
-                        stop=["```", "\n\n\n", _EOS, _TAG_END],
+                        stop=["```", _EOS, _TAG_END],
                         grammar=grammar,
                     )
             text = response["choices"][0]["text"].strip()
@@ -451,4 +643,5 @@ if __name__ == "__main__":
         _sys.exit(1)
 
     print("\nExtraction smoke test passed.")
+
 

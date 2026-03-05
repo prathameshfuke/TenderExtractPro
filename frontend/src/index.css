@@ -481,3 +481,55 @@ ul {
   margin-right: 15px;
   font-weight: bold;
 }
+
+@media (max-width: 1024px) {
+  .app-container {
+    flex-direction: column;
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .sidebar {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    max-height: 48vh;
+  }
+
+  .main-content {
+    min-height: 52vh;
+  }
+
+  .result-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .controls-bar {
+    flex-wrap: wrap;
+    padding: 12px 16px;
+    gap: 10px;
+  }
+
+  .text-input {
+    min-width: 220px;
+  }
+
+  .table-container {
+    padding: 12px 16px;
+  }
+
+  .tabs {
+    padding: 0 16px;
+  }
+
+  .scope-panel {
+    padding: 12px 16px;
+  }
+
+  .source-drawer {
+    width: 100%;
+    right: -100%;
+  }
+}

@@ -1,296 +1,421 @@
-"""
-retrieval.py — Hybrid retrieval with cross-encoder reranking.
+﻿"""
+retrieval.py â€” Qdrant-backed hybrid retrieval with cross-encoder reranking.
 
-Uses pure-numpy brute-force cosine similarity for semantic search
-(avoids FAISS binary compatibility issues on Python 3.14) overlaid
-with BM25 keyword matching. A cross-encoder reranker refines results.
+Architecture
+============
+1.  BGE-large-en-v1.5 (1024-dim) dense embeddings stored in Qdrant.
+    Asymmetric retrieval: documents indexed bare; queries prefixed with
+    the BGE instruction "Represent this sentence for searching relevant
+    passages: " which measurably improves recall for domain text.
 
-Architecture:
-  1. NumPy brute-force cosine similarity with all-mpnet-base-v2 embeddings
-  2. BM25Okapi for keyword-level matching (exact terms, standard codes)
-  3. Weighted score fusion (0.4 BM25 + 0.6 embedding)
-  4. Cross-encoder reranking on top-50 candidates → final top-k
+2.  BM25Okapi in-memory index for exact/keyword matching (standard codes,
+    part numbers, IS/ASTM references that semantic vectors miss).
+
+3.  Weighted score fusion:  0.35 * BM25_norm + 0.65 * Qdrant_cosine
+
+4.  Cross-encoder reranking (ms-marco-MiniLM-L-6-v2) on the top-40
+    candidates before selecting final top-k.
+
+5.  Optional Qdrant payload filter â€” pass section="Technical Specifications"
+    to restrict search to spec chunks at the database level.
+
+Qdrant runs fully in-process (no server) via the local-storage client mode.
+One collection per document, named by the caller (typically the job_id).
 """
 
 from __future__ import annotations
 
 import logging
+import io
+import contextlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import numpy as np
 from rank_bm25 import BM25Okapi
 from sentence_transformers import SentenceTransformer, CrossEncoder
+from qdrant_client import QdrantClient
+from qdrant_client.models import (
+    Distance,
+    VectorParams,
+    PointStruct,
+    Filter,
+    FieldCondition,
+    MatchValue,
+)
 
 from tender_extraction.config import config
 from tender_extraction.schemas import Chunk
 
 logger = logging.getLogger(__name__)
 
-# ── Singleton caches ──────────────────────────────────────────────────────
+# â”€â”€ Singleton model caches â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _embed_model: Optional[SentenceTransformer] = None
 _cross_encoder: Optional[CrossEncoder] = None
 
+# BGE asymmetric instruction used at query time only (not at index time)
+_BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
 
 def _get_embed_model() -> SentenceTransformer:
-    """Lazy-load and cache the sentence-transformer embedding model."""
+    """Lazy-load and cache bge-large-en-v1.5."""
     global _embed_model
     if _embed_model is None:
         model_name = config.retrieval.embedding_model
         logger.info("Loading embedding model: %s ...", model_name)
-        _embed_model = SentenceTransformer(model_name)
-        logger.info("Embedding model loaded (dim=%d).",
-                     _embed_model.get_sentence_embedding_dimension())
+        # Some backend loaders print verbose diagnostics directly to stdout/stderr.
+        # Silence those so the CLI progress bar stays readable.
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            _embed_model = SentenceTransformer(model_name)
+        logger.info(
+            "Embedding model loaded (dim=%d).",
+            _embed_model.get_sentence_embedding_dimension(),
+        )
     return _embed_model
 
 
 def _get_cross_encoder() -> CrossEncoder:
-    """Lazy-load and cache the cross-encoder reranking model."""
+    """Lazy-load and cache the cross-encoder reranker."""
     global _cross_encoder
     if _cross_encoder is None:
         model_name = config.retrieval.rerank_model
         logger.info("Loading cross-encoder reranker: %s ...", model_name)
-        _cross_encoder = CrossEncoder(model_name, max_length=512)
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+            _cross_encoder = CrossEncoder(model_name, max_length=512)
         logger.info("Cross-encoder loaded.")
     return _cross_encoder
 
 
 class HybridRetriever:
     """
-    Numpy cosine-similarity + BM25 hybrid retriever with cross-encoder reranking.
+    Qdrant-backed hybrid retriever.
 
-    Usage:
+    Usage::
+
         retriever = HybridRetriever()
-        retriever.build_index(chunks)
-
+        retriever.build_index(chunks, collection_name="job_abc123")
         results = retriever.retrieve("steel reinforcement grade", top_k=10)
+        # filter to spec chunks only:
+        results = retriever.retrieve_spec_chunks("yield strength", top_k=15)
     """
 
     def __init__(self, persist_dir: Optional[str] = None):
         self._chunks: List[Chunk] = []
         self._bm25: Optional[BM25Okapi] = None
         self._tokenized_corpus: List[List[str]] = []
-        # Numpy matrix: shape (n_chunks, embed_dim) — replaces FAISS
-        self._embeddings: Optional[np.ndarray] = None
-        self._persist_dir = persist_dir or "./_retrieval_index"
 
-    def build_index(self, chunks: List[Chunk], force_rebuild: bool = False) -> None:
+        persist_path = str(persist_dir or config.retrieval.qdrant_path)
+        Path(persist_path).mkdir(parents=True, exist_ok=True)
+
+        # QdrantClient(path=...) uses the in-process local storage engine
+        # (pure-Python, ships with qdrant-client) â€” no external server needed.
+        self._qdrant = QdrantClient(path=persist_path)
+        self._collection_name: Optional[str] = None
+
+        logger.info("Qdrant local client initialised at: %s", persist_path)
+
+    # â”€â”€ Index building â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
+    def build_index(
+        self,
+        chunks: List[Chunk],
+        collection_name: str = "tender",
+        force_rebuild: bool = False,
+    ) -> None:
         """
-        Build numpy embedding matrix and BM25 index from chunks.
+        Encode all chunks with BGE-large and upsert into a Qdrant collection.
+        Also builds an in-memory BM25 index for hybrid scoring.
+
+        If the collection already exists and force_rebuild=False, the Qdrant
+        index is reused (BM25 is always rebuilt from the provided chunks).
         """
         if not chunks:
             raise ValueError("Cannot build index from empty chunk list.")
 
         self._chunks = chunks
+        self._collection_name = collection_name
         texts = [c.text for c in chunks]
 
-        # ── BM25 index ──────────────────────────────────────────────
-        logger.info("Building BM25 index for %d chunks ...", len(texts))
+        # BM25 â€” always rebuilt (fast, in-memory)
+        logger.info("Building BM25 index for %d chunks...", len(texts))
         self._tokenized_corpus = [t.lower().split() for t in texts]
         self._bm25 = BM25Okapi(self._tokenized_corpus)
 
-        # ── Numpy embedding matrix ───────────────────────────────────
-        logger.info("Generating embeddings (numpy brute-force cosine)...")
+        # Qdrant â€” rebuild only if needed
+        existing = {c.name for c in self._qdrant.get_collections().collections}
+        if collection_name in existing and not force_rebuild:
+            logger.info(
+                "Qdrant collection '%s' already exists â€” reusing (pass "
+                "force_rebuild=True to re-embed).",
+                collection_name,
+            )
+            return
+
+        if collection_name in existing:
+            self._qdrant.delete_collection(collection_name)
+            logger.info("Deleted existing Qdrant collection '%s'.", collection_name)
+
+        # Encode with BGE-large (documents: no instruction prefix)
         embed_model = _get_embed_model()
-        embeddings = embed_model.encode(
-            texts, convert_to_numpy=True, show_progress_bar=False, batch_size=32
+        embed_dim = embed_model.get_sentence_embedding_dimension()
+        logger.info(
+            "Encoding %d chunks with %s (dim=%d)...",
+            len(texts), config.retrieval.embedding_model, embed_dim,
         )
-        embeddings = np.array(embeddings, dtype=np.float32)
-        # L2-normalize so dot product == cosine similarity
-        norms = np.linalg.norm(embeddings, axis=1, keepdims=True)
-        norms = np.where(norms == 0, 1.0, norms)
-        self._embeddings = embeddings / norms
+        embeddings = embed_model.encode(
+            texts,
+            convert_to_numpy=True,
+            show_progress_bar=False,
+            batch_size=16,
+            normalize_embeddings=True,   # cosine = dot-product on unit vectors
+        )
+
+        # Create Qdrant collection
+        self._qdrant.create_collection(
+            collection_name=collection_name,
+            vectors_config=VectorParams(size=embed_dim, distance=Distance.COSINE),
+        )
+
+        # Upsert in batches of 200 to stay memory-efficient
+        batch_size = 200
+        for start in range(0, len(chunks), batch_size):
+            batch_chunks = chunks[start: start + batch_size]
+            batch_embs = embeddings[start: start + batch_size]
+            points = [
+                PointStruct(
+                    id=start + i,
+                    vector=emb.tolist(),
+                    payload={
+                        "chunk_id": ch.chunk_id,
+                        "text": ch.text,
+                        "section": ch.metadata.section,
+                        "parent_section": ch.metadata.parent_section,
+                        "chunk_type": ch.metadata.chunk_type,
+                        "page": ch.metadata.page,
+                        "table_id": ch.metadata.table_id or "",
+                    },
+                )
+                for i, (ch, emb) in enumerate(zip(batch_chunks, batch_embs))
+            ]
+            self._qdrant.upsert(collection_name=collection_name, points=points)
 
         logger.info(
-            "Index built: %d chunks, BM25 vocab=%d tokens, embed_dim=%d",
-            len(chunks),
-            sum(len(t) for t in self._tokenized_corpus),
-            self._embeddings.shape[1],
+            "Qdrant index built: %d chunks, collection='%s', embed_dim=%d",
+            len(chunks), collection_name, embed_dim,
         )
 
-    def retrieve(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
-        """
-        Hybrid retrieval: numpy cosine similarity + BM25 + cross-encoder reranking.
+    # â”€â”€ Core retrieval â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-        Pipeline:
-          1. BM25 scores for all chunks (keyword matching)
-          2. Numpy cosine similarity for semantic search (all chunks, brute-force)
-          3. Weighted fusion of normalized scores
-          4. Cross-encoder reranking of top candidates
-          5. Return final top_k
-
-        Returns list of dicts: {chunk, score, bm25_score, embedding_score}.
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 10,
+        section_filter: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
         """
-        if self._bm25 is None or self._embeddings is None:
+        Hybrid retrieval: Qdrant dense search + BM25 + cross-encoder reranking.
+
+        Parameters
+        ----------
+        query          : Natural language query.
+        top_k          : Number of results to return after reranking.
+        section_filter : If set, restricts Qdrant search to chunks whose
+                         `section` payload matches exactly (e.g.
+                         "Technical Specifications").  BM25 candidates are
+                         **not** filtered by section so there's always a
+                         meaningful fusion pool.
+
+        Returns
+        -------
+        List of dicts: {chunk, score, bm25_score, embedding_score}
+        """
+        if self._bm25 is None or self._collection_name is None:
             raise RuntimeError("Index not built. Call build_index() first.")
 
         n = len(self._chunks)
-        rerank_k = config.retrieval.rerank_top_k
+        rerank_k = min(config.retrieval.rerank_top_k, n)
 
-        # ── Step 1: BM25 scores ─────────────────────────────────────
+        # â”€â”€ Step 1: BM25 scores (all chunks) â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         query_tokens = query.lower().split()
         bm25_raw = np.array(self._bm25.get_scores(query_tokens), dtype="float32")
-
-        # ── Step 2: Numpy cosine similarity ─────────────────────────
-        embed_model = _get_embed_model()
-        qvec = embed_model.encode([query], convert_to_numpy=True)
-        qvec = np.array(qvec, dtype=np.float32)
-        # L2-normalize the query vector
-        qnorm = np.linalg.norm(qvec)
-        if qnorm > 0:
-            qvec = qvec / qnorm
-        # Cosine similarity = dot product (embeddings already normalized)
-        emb_raw = (self._embeddings @ qvec.T).squeeze()  # shape (n,)
-        # Shift from [-1, 1] to [0, 1]
-        emb_raw = (emb_raw + 1.0) / 2.0
-
-        # ── Step 3: Weighted fusion ─────────────────────────────────
         bm25_norm = _min_max_normalize(bm25_raw)
-        emb_norm = _min_max_normalize(emb_raw)
+
+        # â”€â”€ Step 2: Qdrant dense search â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        embed_model = _get_embed_model()
+        # BGE asymmetric: query gets an instruction prefix; documents do not.
+        query_with_prefix = _BGE_QUERY_PREFIX + query
+        qvec = embed_model.encode(
+            [query_with_prefix],
+            convert_to_numpy=True,
+            normalize_embeddings=True,
+        )[0]
+
+        qdrant_filter: Optional[Filter] = None
+        if section_filter:
+            qdrant_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="section",
+                        match=MatchValue(value=section_filter),
+                    )
+                ]
+            )
+
+        qdrant_hits = self._qdrant.query_points(
+            collection_name=self._collection_name,
+            query=qvec.tolist(),
+            query_filter=qdrant_filter,
+            limit=rerank_k,
+            with_payload=False,   # payloads already stored in self._chunks
+        ).points
+
+        # Build map: qdrant point_id (== chunk list index) â†’ cosine score
+        hit_id_to_emb_score: Dict[int, float] = {
+            int(h.id): float(h.score) for h in qdrant_hits
+        }
+
+        # â”€â”€ Step 3: Fuse BM25 + Qdrant scores â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+        # Candidate pool = top-BM25 âˆª top-Qdrant
+        top_bm25_ids = set(np.argsort(bm25_raw)[::-1][:rerank_k].tolist())
+        top_qdrant_ids = set(hit_id_to_emb_score.keys())
+        candidate_ids = list(top_bm25_ids | top_qdrant_ids)
 
         w_bm25 = config.retrieval.bm25_weight
         w_emb = config.retrieval.embedding_weight
-        fused = w_bm25 * bm25_norm + w_emb * emb_norm
+        fused: List[tuple] = []   # (idx, fused_score, bm25_s, emb_s)
+        for raw_idx in candidate_ids:
+            idx = int(raw_idx)
+            if idx >= n:
+                continue
+            bm25_s = float(bm25_norm[idx])
+            emb_s = hit_id_to_emb_score.get(idx, 0.0)
+            score = w_bm25 * bm25_s + w_emb * emb_s
+            fused.append((idx, score, bm25_s, emb_s))
 
-        # Take top candidates for reranking
-        candidate_indices = np.argsort(fused)[::-1][:rerank_k]
-        candidates = [
-            (int(idx), float(fused[idx]))
-            for idx in candidate_indices
-            if fused[idx] > 0
-        ]
+        fused.sort(key=lambda x: x[1], reverse=True)
+        top_candidates = fused[:rerank_k]
 
-        if not candidates:
+        if not top_candidates:
             return []
 
-        # ── Step 4: Cross-encoder reranking ─────────────────────────
+        # â”€â”€ Step 4: Cross-encoder reranking â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         try:
             reranker = _get_cross_encoder()
-            pairs = [(query, self._chunks[idx].text) for idx, _ in candidates]
-            rerank_scores = reranker.predict(pairs)
+            pairs = [(query, self._chunks[idx].text) for idx, *_ in top_candidates]
+            ce_scores = reranker.predict(pairs)
+            ce_norm = _min_max_normalize(np.array(ce_scores, dtype="float32"))
 
-            # Normalize rerank scores to [0, 1]
-            rerank_norm = _min_max_normalize(np.array(rerank_scores, dtype="float32"))
-
-            # Blend: 40% hybrid fusion + 60% cross-encoder
-            final_scored = []
-            for i, (idx, hybrid_score) in enumerate(candidates):
-                final_score = 0.4 * hybrid_score + 0.6 * float(rerank_norm[i])
-                final_scored.append((idx, final_score, hybrid_score))
+            final_scored: List[tuple] = []
+            for i, (idx, hybrid_score, bm25_s, emb_s) in enumerate(top_candidates):
+                # 35% hybrid + 65% cross-encoder for final rank
+                final = 0.35 * hybrid_score + 0.65 * float(ce_norm[i])
+                final_scored.append((idx, final, bm25_s, emb_s))
 
             final_scored.sort(key=lambda x: x[1], reverse=True)
         except Exception as exc:
-            logger.warning("Cross-encoder reranking failed: %s. Using hybrid scores.", exc)
-            final_scored = [(idx, score, score) for idx, score in candidates]
+            logger.warning(
+                "Cross-encoder reranking failed: %s. Using hybrid scores.", exc
+            )
+            final_scored = list(top_candidates)
 
-        # ── Step 5: Build results ───────────────────────────────────
+        # â”€â”€ Step 5: Build results â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
         results: List[Dict[str, Any]] = []
-        for idx, final_score, hybrid_score in final_scored[:top_k]:
-            results.append({
-                "chunk": self._chunks[idx],
-                "score": final_score,
-                "bm25_score": float(bm25_norm[idx]),
-                "embedding_score": float(emb_norm[idx]),
-            })
+        for idx, final_score, bm25_s, emb_s in final_scored[:top_k]:
+            results.append(
+                {
+                    "chunk": self._chunks[idx],
+                    "score": final_score,
+                    "bm25_score": bm25_s,
+                    "embedding_score": emb_s,
+                }
+            )
 
         logger.info(
-            "Retrieved %d chunks for '%s...' (top=%.3f, reranked)",
-            len(results), query[:40], results[0]["score"] if results else 0.0,
+            "Retrieved %d chunks for '%s...' (top=%.3f, section_filter=%s)",
+            len(results),
+            query[:40],
+            results[0]["score"] if results else 0.0,
+            section_filter,
         )
         return results
 
+    # â”€â”€ Specialised retrieval variants â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+
     def retrieve_spec_chunks(
-        self, query: str, top_k: int = 15, prefer_pages_after: int = 15
+        self, query: str, top_k: int = 15
     ) -> List[Dict[str, Any]]:
         """
-        Spec-focused retrieval with page boosting for later pages
-        where specs typically live in tender documents.
+        Spec-focused retrieval with boosting for table chunks and later pages
+        (where specs typically live in Indian government tenders).
+        Also tries a section-filtered Qdrant pass and merges results.
         """
-        chunks = self.retrieve(query, top_k=top_k * 2)
-        # Boost chunks from later pages where specs usually live
-        for r in chunks:
-            if r["chunk"].metadata.page > prefer_pages_after:
-                r["score"] *= 1.2
-            # Also boost table chunks — specs are often in tables
-            if r["chunk"].metadata.chunk_type == "table":
-                r["score"] *= 1.15
-        chunks.sort(key=lambda x: x["score"], reverse=True)
-        return chunks[:top_k]
+        # Broad pass (no filter) so we don't miss mislabelled sections
+        results = self.retrieve(query, top_k=top_k * 2, section_filter=None)
+
+        for r in results:
+            ch = r["chunk"]
+            if ch.metadata.chunk_type == "table":
+                r["score"] = min(1.0, r["score"] * 1.25)
+            if ch.metadata.page > 15:
+                r["score"] = min(1.0, r["score"] * 1.10)
+            sec = (ch.metadata.section or "").lower()
+            if any(
+                kw in sec
+                for kw in ("specification", "technical", "parameter", "requirement")
+            ):
+                r["score"] = min(1.0, r["score"] * 1.15)
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:top_k]
 
     def retrieve_with_filter(
-        self, query: str, top_k: int = 10,
+        self,
+        query: str,
+        top_k: int = 10,
         chunk_types: Optional[List[str]] = None,
         min_page: Optional[int] = None,
         max_page: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
-        """
-        Filtered retrieval using numpy cosine similarity with post-filtering.
-        """
-        if self._embeddings is None:
-            raise RuntimeError("Index not built. Call build_index() first.")
-
-        embed_model = _get_embed_model()
-        qvec = embed_model.encode([query], convert_to_numpy=True)
-        qvec = np.array(qvec, dtype=np.float32)
-        qnorm = np.linalg.norm(qvec)
-        if qnorm > 0:
-            qvec = qvec / qnorm
-        # All cosine similarities
-        sims = (self._embeddings @ qvec.T).squeeze()
-        # Sort descending
-        sorted_indices = np.argsort(sims)[::-1]
-
-        results = []
-        for idx in sorted_indices:
-            idx = int(idx)
-            chunk = self._chunks[idx]
-
-            if chunk_types and chunk.metadata.chunk_type not in chunk_types:
+        """Post-filtered retrieval by chunk type and page range."""
+        results = self.retrieve(query, top_k=top_k * 4)
+        filtered = []
+        for r in results:
+            ch = r["chunk"]
+            if chunk_types and ch.metadata.chunk_type not in chunk_types:
                 continue
-            if min_page is not None and chunk.metadata.page < min_page:
+            if min_page is not None and ch.metadata.page < min_page:
                 continue
-            if max_page is not None and chunk.metadata.page > max_page:
+            if max_page is not None and ch.metadata.page > max_page:
                 continue
-
-            score = float((sims[idx] + 1.0) / 2.0)
-            results.append({
-                "chunk": chunk,
-                "score": score,
-                "bm25_score": 0.0,
-                "embedding_score": score,
-            })
-
-            if len(results) >= top_k:
+            filtered.append(r)
+            if len(filtered) >= top_k:
                 break
+        return filtered
 
-        return results
+    def delete_collection(self, collection_name: Optional[str] = None) -> None:
+        """Delete a Qdrant collection (e.g. for cleanup after a job)."""
+        name = collection_name or self._collection_name
+        if name:
+            try:
+                self._qdrant.delete_collection(name)
+                logger.info("Deleted Qdrant collection: %s", name)
+            except Exception as exc:
+                logger.warning("Could not delete collection %s: %s", name, exc)
 
-    def save(self, directory: str) -> None:
-        """FAISS doesn't auto-persist, but we add dummy API for compatibility."""
-        logger.info("FAISS index built in-memory. Persistence mocked.")
 
-    @classmethod
-    def load(cls, directory: str) -> "HybridRetriever":
-        """
-        Load is mocked for API compatibility. Index built fresh.
-        """
-        retriever = cls(persist_dir=directory)
-        logger.info("HybridRetriever loaded (mock persistence).")
-        return retriever
-
+# â”€â”€ Helpers â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 def _min_max_normalize(arr: np.ndarray) -> np.ndarray:
-    """Normalize to [0, 1]. Returns zeros if all values identical."""
+    """Normalise to [0, 1]. Returns zeros if all values identical."""
     mn, mx = arr.min(), arr.max()
     if mx - mn < 1e-9:
         return np.zeros_like(arr)
     return (arr - mn) / (mx - mn)
 
 
-# ── Query expansion utilities ────────────────────────────────────────────
+# â”€â”€ Query expansion â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
-# Domain-specific synonym map for tender documents
-_SYNONYMS = {
+_SYNONYMS: Dict[str, List[str]] = {
     "specification": ["specs", "requirements", "parameters", "standard", "criteria"],
     "material": ["grade", "composition", "alloy", "substance"],
     "dimension": ["size", "length", "width", "height", "thickness", "diameter"],
@@ -304,68 +429,15 @@ _SYNONYMS = {
 
 
 def expand_query(query: str) -> str:
-    """
-    Expand a query with domain-specific synonyms.
-    Adds 1-2 relevant synonyms per matching keyword to improve recall
-    without overwhelming BM25 with too many terms.
-    """
+    """Expand query with up to 2 domain synonyms per matching keyword."""
     query_lower = query.lower()
     expansions = []
     for term, synonyms in _SYNONYMS.items():
         if term in query_lower:
-            # Add top 2 synonyms that aren't already in the query
             added = 0
             for syn in synonyms:
                 if syn.lower() not in query_lower and added < 2:
                     expansions.append(syn)
                     added += 1
-    if expansions:
-        return query + " " + " ".join(expansions)
-    return query
+    return (query + " " + " ".join(expansions)).strip() if expansions else query
 
-
-# ── Smoke test ────────────────────────────────────────────────────────────
-
-if __name__ == "__main__":
-    import sys
-    logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
-
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-    from tender_extraction.ingestion import ingest_document
-    from tender_extraction.chunking import create_chunks
-    from tender_extraction.table_extraction import extract_tables
-
-    pdf = "dataset/globaltender1576.pdf"
-    if not Path(pdf).exists():
-        print(f"Dataset file not found: {pdf}")
-        sys.exit(1)
-
-    print(f"Ingesting {pdf} ...")
-    pages = ingest_document(pdf)
-    tables = extract_tables(pdf)
-    chunks = create_chunks(pages, tables)
-    print(f"Created {len(chunks)} chunks.")
-
-    print("Building FAISS hybrid index ...")
-    retriever = HybridRetriever()
-    retriever.build_index(chunks)
-
-    # Test retrieval with real queries
-    queries = [
-        "technical specifications requirements",
-        "scope of work deliverables",
-        "steel reinforcement grade specification",
-    ]
-    for q in queries:
-        results = retriever.retrieve(q, top_k=5)
-        print(f"\nQuery: '{q}'")
-        for r in results:
-            c = r["chunk"]
-            print(f"  score={r['score']:.3f} page={c.metadata.page} "
-                  f"type={c.metadata.chunk_type}: {c.text[:80]}...")
-
-    # Test query expansion
-    expanded = expand_query("specification tolerance material")
-    print(f"\nExpanded query: '{expanded}'")
-
-    print("\nRetrieval smoke test passed.")

@@ -81,12 +81,13 @@ class RetrievalConfig:
     Cross-encoder reranking on top-50 candidates before selecting
     final top-k gives another ~8% MRR improvement.
     """
-    embedding_model: str = "all-mpnet-base-v2"
+    embedding_model: str = "BAAI/bge-large-en-v1.5"
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-    bm25_weight: float = 0.4
-    embedding_weight: float = 0.6
-    rerank_top_k: int = 50
+    bm25_weight: float = 0.35
+    embedding_weight: float = 0.65
+    rerank_top_k: int = 40
     top_k: int = 10
+    qdrant_path: str = "./qdrant_storage"
 
 
 @dataclass
@@ -101,12 +102,12 @@ class LLMConfig:
     """
     model_path: str = os.getenv(
         "LLM_MODEL_PATH",
-        "models/Phi-3-mini-4k-instruct-q4.gguf",
+        "models/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
     )
     n_ctx: int = 4096
-    n_threads: Optional[int] = 4
+    n_threads: Optional[int] = 8
     n_gpu_layers: int = -1
-    max_tokens: int = 2048
+    max_tokens: int = 512
     temperature: float = 0.05
     top_p: float = 0.9
     repeat_penalty: float = 1.15

@@ -16,6 +16,12 @@ export default function Sidebar({ jobs, selectedJob, onSelectJob, onUploadComple
             </div>
 
             <div className="job-list">
+                {jobs.length === 0 && (
+                    <div style={{ color: 'var(--text-muted)', fontSize: '0.85rem', padding: '12px' }}>
+                        No extraction jobs yet.
+                    </div>
+                )}
+
                 {jobs.map(job => (
                     <JobCard
                         key={job.job_id}

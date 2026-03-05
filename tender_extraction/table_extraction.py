@@ -168,6 +168,21 @@ def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
 
     col_map = _map_columns(headers)
 
+    # Precision-first guardrails: skip tables that don't expose enough
+    # structured columns to represent technical specs.
+    # This avoids extracting legal/admin prose rows as fake specs.
+    has_item_col = "item_name" in col_map
+    has_spec_signal_col = any(
+        k in col_map
+        for k in ("specification_text", "numeric_value", "tolerance", "standard_reference", "material")
+    )
+    if not has_item_col or not has_spec_signal_col:
+        logger.info(
+            "Skipping %s (page %d): weak column mapping (%d cols mapped: %s)",
+            table_id, page, len(col_map), list(col_map.keys())
+        )
+        return []
+
     # For tables with correctly mapped spec columns, be MORE permissive
     has_spec_columns = len(col_map) >= 2
     is_spec_page = page >= 20  # Pages 20+ are more likely to have real specs
@@ -212,6 +227,17 @@ def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
 
         item_name_str = str(spec["item_name"]).strip()
         spec_text_str = str(spec["specification_text"]).strip()
+
+        # Reject rows that are clearly narrative/legal prose instead of
+        # compact technical entries.
+        long_sentence_like = (
+            len(spec_text_str) > 180
+            and spec_text_str.count(" ") > 25
+            and not re.search(r"\d", spec_text_str)
+        )
+        if long_sentence_like:
+            skipped.append(f"narrative row: '{spec_text_str[:50]}'")
+            continue
 
         # Skip clearly bad rows
         if len(item_name_str) < 4 and len(spec_text_str) < 10:
