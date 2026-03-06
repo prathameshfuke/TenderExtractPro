@@ -1,0 +1,658 @@
+{
+  "technical_specifications": [
+    {
+      "component": "rates with the",
+      "specs": {
+        "specification": "implement ation/cons truction met hods and sc hedule pr oposed.",
+        "numeric_value": "hods and sc"
+      },
+      "source": {
+        "chunk_id": "table_027_row_1",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | rates with the | implement | ation/cons | truction met | hods and sc | hedule pr | oposed."
+      },
+      "confidence": 0.5455
+    },
+    {
+      "component": "IISER PUNE res",
+      "specs": {
+        "specification": "IISER PUNE res erves the ri ght withou t being liabl e for any da mages or o bligation to",
+        "numeric_value": "e for any da"
+      },
+      "source": {
+        "chunk_id": "table_027_row_3",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": "23.1. |  | IISER PUNE res | erves the ri | ght withou | t being liabl | e for any da | mages or o | bligation to"
+      },
+      "confidence": 0.5089
+    },
+    {
+      "component": "a) amend the",
+      "specs": {
+        "specification": "scope and v alue of the contract to the bidder",
+        "numeric_value": "the bidder"
+      },
+      "source": {
+        "chunk_id": "table_027_row_5",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | a) amend the | scope and v | alue of the | contract to | the bidder |  | "
+      },
+      "confidence": 0.5325
+    },
+    {
+      "component": "b) Reject any",
+      "specs": {
+        "specification": "or all applic ations with out assignin g any reaso ns",
+        "numeric_value": "g any reaso"
+      },
+      "source": {
+        "chunk_id": "table_027_row_6",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | b) Reject any | or all applic | ations with | out assignin | g any reaso | ns | "
+      },
+      "confidence": 0.4762
+    },
+    {
+      "component": "IISER, PUNE sh",
+      "specs": {
+        "specification": "IISER, PUNE sh all award th e contract to the Bidde r whose eva luated off er / bid has been",
+        "numeric_value": "r whose eva"
+      },
+      "source": {
+        "chunk_id": "table_027_row_7",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": "23.2 |  | IISER, PUNE sh | all award th | e contract | to the Bidde | r whose eva | luated off | er / bid has been"
+      },
+      "confidence": 0.5175
+    },
+    {
+      "component": "determined to",
+      "specs": {
+        "specification": "be the te chnically s uitable and financially l owest and is substantially",
+        "numeric_value": "financially l"
+      },
+      "source": {
+        "chunk_id": "table_027_row_8",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | determined to | be the te | chnically s | uitable and | financially l | owest and | is substantially"
+      },
+      "confidence": 0.6923
+    },
+    {
+      "component": "responsive to",
+      "specs": {
+        "specification": "the Bidding Document , provided f urther that t he Bidder is determined to",
+        "numeric_value": "urther that t"
+      },
+      "source": {
+        "chunk_id": "table_027_row_9",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | responsive to | the Bidding | Document | , provided f | urther that t | he Bidder | is determined to"
+      },
+      "confidence": 0.6364
+    },
+    {
+      "component": "be qualified t",
+      "specs": {
+        "specification": "o execute t he contra ct satisfacto rily. The Bo ard of Go vernors of IISER",
+        "numeric_value": "rily. The Bo"
+      },
+      "source": {
+        "chunk_id": "table_027_row_10",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | be qualified t | o execute t | he contra | ct satisfacto | rily. The Bo | ard of Go | vernors of IISER"
+      },
+      "confidence": 0.5128
+    },
+    {
+      "component": "reserves the ri",
+      "specs": {
+        "specification": "ght to acce pt or reject any applica tion and to annul the pre-qualification",
+        "numeric_value": "tion and to"
+      },
+      "source": {
+        "chunk_id": "table_027_row_11",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | reserves the ri | ght to acce | pt or reject | any applica | tion and to | annul the | pre-qualification"
+      },
+      "confidence": 0.4954
+    },
+    {
+      "component": "process and re",
+      "specs": {
+        "specification": "ject all appl ications at any time, w ithout there by incurri ng any liability to",
+        "numeric_value": "ithout there"
+      },
+      "source": {
+        "chunk_id": "table_027_row_12",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | process and re | ject all appl | ications at | any time, w | ithout there | by incurri | ng any liability to"
+      },
+      "confidence": 0.5455
+    },
+    {
+      "component": "the affected a",
+      "specs": {
+        "specification": "pplicants or specifying the grounds for the Em ployer’s ac tion",
+        "numeric_value": "for the Em"
+      },
+      "source": {
+        "chunk_id": "table_027_row_13",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | the affected a | pplicants or | specifying | the grounds | for the Em | ployer’s ac | tion"
+      },
+      "confidence": 0.4947
+    },
+    {
+      "component": "Contractor wh",
+      "specs": {
+        "specification": "Contractor wh ose tender is accepted will be requ ired to furni sh Perfor mance guarantee",
+        "numeric_value": "ired to furni"
+      },
+      "source": {
+        "chunk_id": "table_027_row_14",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": "24 |  | Contractor wh | ose tender | is accepted | will be requ | ired to furni | sh Perfor | mance guarantee"
+      },
+      "confidence": 0.5046
+    },
+    {
+      "component": "of 5% (Five Pe",
+      "specs": {
+        "specification": "rcent) of th e tendered amount wi thin the peri od specifi ed in Schedule C.",
+        "numeric_value": "thin the peri"
+      },
+      "source": {
+        "chunk_id": "table_027_row_15",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | of 5% (Five Pe | rcent) of th | e tendered | amount wi | thin the peri | od specifi | ed in Schedule C."
+      },
+      "confidence": 0.5455
+    },
+    {
+      "component": "This guarante",
+      "specs": {
+        "specification": "e shall be in accordanc e with the p rescribed fo rm. In cas e the contractor",
+        "numeric_value": "rescribed fo"
+      },
+      "source": {
+        "chunk_id": "table_027_row_16",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | This guarante | e shall be in | accordanc | e with the p | rescribed fo | rm. In cas | e the contractor"
+      },
+      "confidence": 0.5385
+    },
+    {
+      "component": "fails to depos",
+      "specs": {
+        "specification": "it the said performa nce guarant ee within t he period as indicated in",
+        "numeric_value": "ee within t"
+      },
+      "source": {
+        "chunk_id": "table_027_row_17",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | fails to depos | it the said | performa | nce guarant | ee within t | he period | as indicated in"
+      },
+      "confidence": 0.5
+    },
+    {
+      "component": "Schedule ‘C’. i",
+      "specs": {
+        "specification": "ncluding the extended period if an y, the Earne st Money deposited by the",
+        "numeric_value": "y, the Earne"
+      },
+      "source": {
+        "chunk_id": "table_027_row_18",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | Schedule ‘C’. i | ncluding the | extended | period if an | y, the Earne | st Money | deposited by the"
+      },
+      "confidence": 0.4811
+    },
+    {
+      "component": "contractor sh",
+      "specs": {
+        "specification": "all be forfei ted autom atically with out any no tice to the contractor and",
+        "numeric_value": "out any no"
+      },
+      "source": {
+        "chunk_id": "table_027_row_19",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | contractor sh | all be forfei | ted autom | atically with | out any no | tice to the | contractor and"
+      },
+      "confidence": 0.5385
+    },
+    {
+      "component": "without preju",
+      "specs": {
+        "specification": "dice to any other righ t or remedy . The Earne st Money deposited along",
+        "numeric_value": ". The Earne"
+      },
+      "source": {
+        "chunk_id": "table_027_row_20",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | without preju | dice to any | other righ | t or remedy | . The Earne | st Money | deposited along"
+      },
+      "confidence": 0.5098
+    },
+    {
+      "component": "with tender sh",
+      "specs": {
+        "specification": "all be retur ned after r eceiving the aforesaid p erformanc e guarantee. The",
+        "numeric_value": "aforesaid p"
+      },
+      "source": {
+        "chunk_id": "table_027_row_21",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | with tender sh | all be retur | ned after r | eceiving the | aforesaid p | erformanc | e guarantee. The"
+      },
+      "confidence": 0.5
+    },
+    {
+      "component": "earnest mone",
+      "specs": {
+        "specification": "y deposited along with bid shall be returned af ter receivi ng the aforesaid",
+        "numeric_value": "returned af"
+      },
+      "source": {
+        "chunk_id": "table_027_row_22",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | earnest mone | y deposited | along with | bid shall be | returned af | ter receivi | ng the aforesaid"
+      },
+      "confidence": 0.4906
+    },
+    {
+      "component": "The contracto",
+      "specs": {
+        "specification": "r whose bid is accepte d will also b e required t o furnish e ither copy of the",
+        "numeric_value": "e required t"
+      },
+      "source": {
+        "chunk_id": "table_027_row_24",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | The contracto | r whose bid | is accepte | d will also b | e required t | o furnish e | ither copy of the"
+      },
+      "confidence": 0.5636
+    },
+    {
+      "component": "applicable lice",
+      "specs": {
+        "specification": "nses/regist rations or proof of a pplying for obtaining labour licenses,",
+        "numeric_value": "pplying for"
+      },
+      "source": {
+        "chunk_id": "table_027_row_25",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | applicable lice | nses/regist | rations or | proof of a | pplying for | obtaining | labour licenses,"
+      },
+      "confidence": 0.4615
+    },
+    {
+      "component": "registration w",
+      "specs": {
+        "specification": "ith EPFO, ES IC, and BO CW Welfar e Board i/c p rovident Fund Code No. if",
+        "numeric_value": "e Board i/c p"
+      },
+      "source": {
+        "chunk_id": "table_027_row_26",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | registration w | ith EPFO, ES | IC, and BO | CW Welfar | e Board i/c p | rovident | Fund Code No. if"
+      },
+      "confidence": 0.5143
+    },
+    {
+      "component": "applicable an",
+      "specs": {
+        "specification": "d also ens ure the c ompliance of aforesai d provisio ns by the sub-",
+        "numeric_value": "of aforesai"
+      },
+      "source": {
+        "chunk_id": "table_027_row_27",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | applicable an | d also ens | ure the c | ompliance | of aforesai | d provisio | ns by the sub-"
+      },
+      "confidence": 0.4848
+    },
+    {
+      "component": "contractors, if",
+      "specs": {
+        "specification": "any engage d by the co ntractor for the said wor k and pro gram chart (Time",
+        "numeric_value": "the said wor"
+      },
+      "source": {
+        "chunk_id": "table_027_row_28",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | contractors, if | any engage | d by the co | ntractor for | the said wor | k and pro | gram chart (Time"
+      },
+      "confidence": 0.5
+    },
+    {
+      "component": "and Progress)",
+      "specs": {
+        "specification": "within the p eriod spec ified in Sche dule C.",
+        "numeric_value": "dule C."
+      },
+      "source": {
+        "chunk_id": "table_027_row_29",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | and Progress) | within the p | eriod spec | ified in Sche | dule C. |  | "
+      },
+      "confidence": 0.5289
+    },
+    {
+      "component": "For civil repair",
+      "specs": {
+        "specification": "For civil repair s related to Electrical, Mechanical (E&M), firefi ghting & li ft components of",
+        "numeric_value": "(E&M), firefi"
+      },
+      "source": {
+        "chunk_id": "table_027_row_30",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": "25 |  | For civil repair | s related to | Electrical, | Mechanical | (E&M), firefi | ghting & li | ft components of"
+      },
+      "confidence": 0.6923
+    },
+    {
+      "component": "works, the ma",
+      "specs": {
+        "specification": "in agency h as to coor dinate with specialized agency as per Direction of",
+        "numeric_value": "specialized"
+      },
+      "source": {
+        "chunk_id": "table_027_row_31",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | works, the ma | in agency h | as to coor | dinate with | specialized | agency as | per Direction of"
+      },
+      "confidence": 0.5556
+    },
+    {
+      "component": "The Electrical A",
+      "specs": {
+        "specification": "The Electrical A MC contrac tor has to g et written pe rmission fro m Expert a gency and ensure",
+        "numeric_value": "rmission fro"
+      },
+      "source": {
+        "chunk_id": "table_027_row_33",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": "25.1 |  | The Electrical A | MC contrac | tor has to g | et written pe | rmission fro | m Expert a | gency and ensure"
+      },
+      "confidence": 0.5385
+    },
+    {
+      "component": "presence of te",
+      "specs": {
+        "specification": "chnician bef ore taking- up any work in these serv ices areas.",
+        "numeric_value": "in these serv"
+      },
+      "source": {
+        "chunk_id": "table_027_row_34",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " |  | presence of te | chnician bef | ore taking- | up any work | in these serv | ices areas. | "
+      },
+      "confidence": 0.6154
+    },
+    {
+      "component": "case the main",
+      "specs": {
+        "specification": "In case the main contractor i ntends to c hange any of the above a gency/age ncies during",
+        "numeric_value": "the above a"
+      },
+      "source": {
+        "chunk_id": "table_027_row_35",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": "25.4 | In | case the main | contractor i | ntends to c | hange any of | the above a | gency/age | ncies during"
+      },
+      "confidence": 0.5091
+    },
+    {
+      "component": "he operation o",
+      "specs": {
+        "specification": "he operation o f the contra ct, he shal l obtain prio r approval o f Engineer -in-charge. The",
+        "numeric_value": "r approval o"
+      },
+      "source": {
+        "chunk_id": "table_027_row_36",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | t | he operation o | f the contra | ct, he shal | l obtain prio | r approval o | f Engineer | -in-charge. The"
+      },
+      "confidence": 0.5417
+    },
+    {
+      "component": "ew agency/ag",
+      "specs": {
+        "specification": "ew agency/ag encies shall also have to satisfy th e laid down eligibility c riteria. In case",
+        "numeric_value": "e laid down"
+      },
+      "source": {
+        "chunk_id": "table_027_row_37",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | n | ew agency/ag | encies shall | also have | to satisfy th | e laid down | eligibility c | riteria. In case"
+      },
+      "confidence": 0.5182
+    },
+    {
+      "component": "ngineer-in-ch",
+      "specs": {
+        "specification": "ngineer-in-ch arge is not s atisfied wit h the perfo rmance of a ny agency, he can direct",
+        "numeric_value": "rmance of a"
+      },
+      "source": {
+        "chunk_id": "table_027_row_38",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | E | ngineer-in-ch | arge is not s | atisfied wit | h the perfo | rmance of a | ny agency, | he can direct"
+      },
+      "confidence": 0.5047
+    },
+    {
+      "component": "he contractor",
+      "specs": {
+        "specification": "he contractor to change t he agency executing su ch items of work and t his shall be",
+        "numeric_value": "ch items of"
+      },
+      "source": {
+        "chunk_id": "table_027_row_39",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | t | he contractor | to change t | he agency | executing su | ch items of | work and t | his shall be"
+      },
+      "confidence": 0.5196
+    },
+    {
+      "component": "inding on the",
+      "specs": {
+        "specification": "inding on the contractor."
+      },
+      "source": {
+        "chunk_id": "table_027_row_40",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | b | inding on the | contractor. |  |  |  |  | "
+      },
+      "confidence": 0.6154
+    },
+    {
+      "component": "unning payme",
+      "specs": {
+        "specification": "R unning payme nt for the work shall be made to the main contract or. In case main",
+        "numeric_value": "to the main"
+      },
+      "source": {
+        "chunk_id": "table_027_row_41",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": "25.5 | R | unning payme | nt for the | work shall | be made | to the main | contract | or. In case main"
+      },
+      "confidence": 0.4757
+    },
+    {
+      "component": "ontractor fails",
+      "specs": {
+        "specification": "ontractor fails to make the payment to the contr actor associ ated by hi m within 15 days",
+        "numeric_value": "actor associ"
+      },
+      "source": {
+        "chunk_id": "table_027_row_42",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | c | ontractor fails | to make the | payment | to the contr | actor associ | ated by hi | m within 15 days"
+      },
+      "confidence": 0.5327
+    },
+    {
+      "component": "f receipt of ea",
+      "specs": {
+        "specification": "f receipt of ea ch running a ccount pa yment then on the writt en compla int of contractor",
+        "numeric_value": "on the writt"
+      },
+      "source": {
+        "chunk_id": "table_027_row_43",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | o | f receipt of ea | ch running a | ccount pa | yment then | on the writt | en compla | int of contractor"
+      },
+      "confidence": 0.463
+    },
+    {
+      "component": "ssociated Engi",
+      "specs": {
+        "specification": "ssociated Engi neer in cha rge shall s erve the sho w cause to main cont ractor and after",
+        "numeric_value": "w cause to"
+      },
+      "source": {
+        "chunk_id": "table_027_row_44",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | a | ssociated Engi | neer in cha | rge shall s | erve the sho | w cause to | main cont | ractor and after"
+      },
+      "confidence": 0.486
+    },
+    {
+      "component": "onsidering the",
+      "specs": {
+        "specification": "onsidering the reply of th e same he may make the paymen t directly t o the contractor",
+        "numeric_value": "the paymen"
+      },
+      "source": {
+        "chunk_id": "table_027_row_45",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | c | onsidering the | reply of th | e same he | may make | the paymen | t directly t | o the contractor"
+      },
+      "confidence": 0.5192
+    },
+    {
+      "component": "ssociated as",
+      "specs": {
+        "specification": "ssociated as per the ter ms & con ditions of t he agreem ent drawn between main",
+        "numeric_value": "he agreem"
+      },
+      "source": {
+        "chunk_id": "table_027_row_46",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | a | ssociated as | per the ter | ms & con | ditions of t | he agreem | ent drawn | between main"
+      },
+      "confidence": 0.5455
+    },
+    {
+      "component": "ontractor and",
+      "specs": {
+        "specification": "ontractor and associate c ontractor f ixed by him , if reply of main cont ractor either not",
+        "numeric_value": ", if reply of"
+      },
+      "source": {
+        "chunk_id": "table_027_row_47",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | c | ontractor and | associate c | ontractor f | ixed by him | , if reply of | main cont | ractor either not"
+      },
+      "confidence": 0.4954
+    },
+    {
+      "component": "eceived or fou",
+      "specs": {
+        "specification": "eceived or fou nd unsatisf actory. Suc h payment made to the associate contractor shall",
+        "numeric_value": "made to the"
+      },
+      "source": {
+        "chunk_id": "table_027_row_48",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | r | eceived or fou | nd unsatisf | actory. Suc | h payment | made to the | associate | contractor shall"
+      },
+      "confidence": 0.5
+    },
+    {
+      "component": "e recovered by",
+      "specs": {
+        "specification": "e recovered by the Engine er in charg e from the n ext RA/final bill due to main contractor",
+        "numeric_value": "ext RA/final"
+      },
+      "source": {
+        "chunk_id": "table_027_row_49",
+        "page": 16,
+        "clause": "NOT_FOUND",
+        "exact_text": " | b | e recovered by | the Engine | er in charg | e from the n | ext RA/final | bill due to | main contractor"
+      },
+      "confidence": 0.5385
+    },
+    {
+      "component": "SITC of AV system",
+      "specs": {
+        "specification": "SITC of AV system 3 Month 3 Month 5 % on tendered/accepted value",
+        "numeric_value": "5 % on tendered/accepted value"
+      },
+      "source": {
+        "chunk_id": "table_071_row_3",
+        "page": 38,
+        "clause": "NOT_FOUND",
+        "exact_text": "1 | SITC of AV system | 3 Month | 3 Month | 5 % on tendered/accepted value"
+      },
+      "confidence": 1.0
+    }
+  ],
+  "scope_of_work": {
+    "summary": "The contractor is required to execute the work within 36 months and achieve consecutive three milestones. Failure to do so results in withholding of three times the percentage mentioned in the table for each missed milestone.",
+    "deliverables": [],
+    "exclusions": [],
+    "locations": [],
+    "references": [
+      "p.10",
+      "p.38"
+    ]
+  },
+  "accuracy_score": 53.88
+}

@@ -1,14 +1,16 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
 :root {
-  --bg-dark: #0f1117;
-  --bg-panel: #1a1c23;
-  --bg-hover: #23252e;
-  --border-color: #2d313f;
+  --bg-dark: #090f16;
+  --bg-panel: #111d2a;
+  --bg-hover: #1a2b3d;
+  --border-color: #2b4358;
   
-  --accent-amber: #f59e0b;
-  --accent-amber-hover: #d97706;
+  --accent-amber: #ffb53d;
+  --accent-amber-hover: #e49a24;
   
-  --text-main: #e2e8f0;
-  --text-muted: #94a3b8;
+  --text-main: #eaf2ff;
+  --text-muted: #8ea6be;
   
   --status-green: #10b981;
   --status-green-bg: rgba(16, 185, 129, 0.1);
@@ -17,8 +19,8 @@
   --status-red: #ef4444;
   --status-red-bg: rgba(239, 68, 68, 0.1);
   
-  --font-ui: 'DM Sans', sans-serif;
-  --font-mono: 'JetBrains Mono', monospace;
+  --font-ui: 'Space Grotesk', sans-serif;
+  --font-mono: 'IBM Plex Mono', monospace;
   
   background-color: var(--bg-dark);
   color: var(--text-main);
@@ -39,6 +41,10 @@ body {
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background:
+    radial-gradient(circle at 10% 10%, rgba(255, 181, 61, 0.12), transparent 25%),
+    radial-gradient(circle at 90% 0%, rgba(37, 138, 255, 0.16), transparent 30%),
+    linear-gradient(160deg, #081018 0%, #0b1b2b 45%, #0a1119 100%);
 }
 
 #root {
@@ -57,14 +63,15 @@ body {
 /* Sidebar */
 .sidebar {
   width: 320px;
-  background-color: var(--bg-panel);
+  background: linear-gradient(180deg, rgba(17, 29, 42, 0.92) 0%, rgba(12, 24, 36, 0.92) 100%);
   border-right: 1px solid var(--border-color);
   display: flex;
   flex-direction: column;
+  backdrop-filter: blur(6px);
 }
 
 .sidebar-header {
-  padding: 20px;
+  padding: 22px 20px;
   border-bottom: 1px solid var(--border-color);
   font-weight: 700;
   font-size: 1.2rem;
@@ -89,20 +96,23 @@ body {
 
 /* Job Card */
 .job-card {
-  background-color: var(--bg-dark);
+  background: linear-gradient(180deg, rgba(8, 16, 26, 0.96) 0%, rgba(10, 20, 30, 0.96) 100%);
   border: 1px solid var(--border-color);
-  padding: 15px;
+  padding: 14px;
   cursor: pointer;
-  transition: border-color 0.2s;
+  transition: border-color 0.2s, transform 0.2s, box-shadow 0.2s;
+  border-radius: 12px;
 }
 
 .job-card:hover {
   border-color: var(--accent-amber);
+  transform: translateY(-2px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
 }
 
 .job-card.active {
   border-color: var(--accent-amber);
-  background-color: rgba(245, 158, 11, 0.05);
+  background: linear-gradient(180deg, rgba(255, 181, 61, 0.09) 0%, rgba(10, 20, 30, 0.96) 100%);
 }
 
 .job-title {
@@ -140,7 +150,7 @@ body {
 
 /* Progress Bar */
 .progress-track {
-  height: 4px;
+  height: 6px;
   background-color: var(--border-color);
   margin-top: 10px;
   position: relative;
@@ -149,7 +159,7 @@ body {
 
 .progress-fill {
   height: 100%;
-  background-color: var(--accent-amber);
+  background: linear-gradient(90deg, #ffb53d, #ffd18a);
 }
 
 .job-message {
@@ -166,12 +176,13 @@ body {
 }
 
 .upload-zone {
-  border: 1px dashed var(--border-color);
+  border: 1px dashed #3a5872;
   padding: 20px;
   text-align: center;
   cursor: pointer;
   transition: all 0.2s;
-  background-color: var(--bg-dark);
+  background: linear-gradient(180deg, rgba(10, 20, 30, 0.92) 0%, rgba(8, 16, 26, 0.92) 100%);
+  border-radius: 14px;
 }
 
 .upload-zone:hover, .upload-zone.drag-active {
@@ -194,7 +205,7 @@ body {
   flex: 1;
   display: flex;
   flex-direction: column;
-  background-color: var(--bg-dark);
+  background: linear-gradient(180deg, rgba(9, 15, 22, 0.9) 0%, rgba(8, 12, 18, 0.92) 100%);
   position: relative;
 }
 
@@ -210,7 +221,7 @@ body {
 /* Result Viewer */
 .result-header {
   padding: 20px 30px;
-  background-color: var(--bg-panel);
+  background: linear-gradient(90deg, rgba(17, 29, 42, 0.95) 0%, rgba(9, 18, 28, 0.95) 100%);
   border-bottom: 1px solid var(--border-color);
   display: flex;
   justify-content: space-between;
@@ -241,14 +252,15 @@ body {
   display: flex;
   gap: 15px;
   border-bottom: 1px solid var(--border-color);
-  background-color: var(--bg-dark);
+  background: rgba(10, 17, 26, 0.8);
 }
 
 .input-group {
   display: flex;
   align-items: center;
-  background-color: var(--bg-panel);
+  background-color: rgba(17, 29, 42, 0.9);
   border: 1px solid var(--border-color);
+  border-radius: 10px;
 }
 
 .input-group:focus-within {
@@ -271,7 +283,7 @@ body {
 }
 
 .select-input {
-  background: var(--bg-panel);
+  background: rgba(17, 29, 42, 0.95);
   border: 1px solid var(--border-color);
   color: var(--text-main);
   padding: 8px 12px;
@@ -289,6 +301,7 @@ body {
   display: flex;
   border-bottom: 1px solid var(--border-color);
   padding: 0 30px;
+  background: rgba(12, 20, 30, 0.75);
 }
 
 .tab {
@@ -314,6 +327,9 @@ body {
   flex: 1;
   overflow: auto;
   padding: 20px 30px;
+  background:
+    linear-gradient(180deg, rgba(7, 13, 20, 0.7) 0%, rgba(8, 14, 22, 0.7) 100%),
+    repeating-linear-gradient(0deg, rgba(255, 255, 255, 0.015), rgba(255, 255, 255, 0.015) 1px, transparent 1px, transparent 28px);
 }
 
 table {
@@ -330,7 +346,7 @@ th, td {
 }
 
 th {
-  background-color: var(--bg-panel);
+  background-color: #102131;
   color: var(--text-muted);
   font-weight: 500;
   position: sticky;
@@ -435,13 +451,15 @@ tbody tr:hover {
   margin-bottom: 15px;
   border-bottom: 1px dashed var(--border-color);
   padding-bottom: 5px;
+  letter-spacing: 0.02em;
 }
 
 .task-card {
-  background-color: var(--bg-panel);
+  background: linear-gradient(180deg, rgba(17, 29, 42, 0.92) 0%, rgba(11, 22, 34, 0.92) 100%);
   border: 1px solid var(--border-color);
   padding: 20px;
   margin-bottom: 15px;
+  border-radius: 12px;
 }
 
 .task-desc {

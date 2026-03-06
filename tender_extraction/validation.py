@@ -293,8 +293,8 @@ if __name__ == "__main__":
 
     # This spec should PASS grounding (text exists in source)
     good_spec = {
-        "item_name": "Steel Bars",
-        "specification_text": "Grade 60 conforming to ASTM A615",
+        "component": "Steel Bars",
+        "specs": {"grade": "Grade 60 conforming to ASTM A615"},
         "source": {
             "chunk_id": "chunk_test_001",
             "page": 15,
@@ -304,26 +304,32 @@ if __name__ == "__main__":
 
     # This spec should FAIL grounding (hallucinated)
     bad_spec = {
-        "item_name": "Copper Wire",
-        "specification_text": "Pure copper 99.9% purity",
+        "component": "Copper Wire",
+        "specs": {"purity": "Pure copper 99.9% purity"},
         "source": {
             "chunk_id": "chunk_fake",
             "page": 99,
-            "exact_text": "Copper wire meeting international standards",
+            "exact_text": "Quantum unobtanium plasma conduit with superconducting flux harmonizer",
         },
     }
 
     extraction = {
         "technical_specifications": [good_spec, bad_spec],
-        "scope_of_work": {"tasks": [], "exclusions": []},
+        "scope_of_work": {
+            "summary": "NOT_FOUND",
+            "deliverables": [],
+            "exclusions": [],
+            "locations": [],
+            "references": [],
+        },
     }
 
     result = validate_extractions(extraction, source_chunks)
     specs = result["technical_specifications"]
     print(f"Input: 2 specs, Output: {len(specs)} specs (1 should be rejected)")
     for s in specs:
-        print(f"  - {s['item_name']}: confidence={s['confidence']}")
+        print(f"  - {s['component']}: confidence={s['confidence']}")
 
     assert len(specs) == 1, f"Expected 1 spec (bad should be rejected), got {len(specs)}"
-    assert specs[0]["item_name"] == "Steel Bars"
+    assert specs[0]["component"] == "Steel Bars"
     print("\nValidation smoke test passed.")

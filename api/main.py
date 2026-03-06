@@ -16,6 +16,7 @@ OUTPUT_DIR = Path("outputs"); OUTPUT_DIR.mkdir(exist_ok=True)
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
+    now = time.time()
     job_id = str(uuid.uuid4())[:8]
     pdf_path = UPLOAD_DIR / f"{job_id}.pdf"
     content = await file.read()
@@ -23,7 +24,8 @@ async def upload(file: UploadFile = File(...)):
     jobs[job_id] = {
         "status": "queued", "progress": 0,
         "message": "Queued", "filename": file.filename,
-        "job_id": job_id, "result_path": None
+        "job_id": job_id, "result_path": None,
+        "created_at": now, "started_at": None, "updated_at": now
     }
     thread = threading.Thread(
         target=run_pipeline_sync, 
@@ -42,6 +44,8 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
         
         job = jobs[job_id]
         started_at = time.time()
+        job["started_at"] = started_at
+        job["updated_at"] = started_at
         stage_state = {"message": "Starting pipeline...", "progress": 5}
 
         def heartbeat_loop():
@@ -51,6 +55,7 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
                 elapsed = int(time.time() - started_at)
                 base = stage_state["message"]
                 job["message"] = f"{base} ({elapsed}s)"
+                job["updated_at"] = time.time()
 
         heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
         heartbeat_thread.start()
@@ -58,6 +63,7 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
         job["status"] = "running"
         job["progress"] = 5
         job["message"] = "Starting pipeline..."
+        job["updated_at"] = time.time()
         
         def progress_callback(progress: int, message: str):
             stage_state["message"] = message
@@ -65,6 +71,7 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
             job["progress"] = progress
             job["message"] = message
             job["status"] = "running"
+            job["updated_at"] = time.time()
         
         output_path = str(OUTPUT_DIR / f"{job_id}.json")
         pipeline = TenderExtractionPipeline()
@@ -78,10 +85,12 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
         job["status"] = "done"
         job["result_path"] = output_path
         job["message"] = f"Complete - {specs} specs, {deliverables} deliverables extracted"
+        job["updated_at"] = time.time()
         
     except Exception as e:
         jobs[job_id]["status"] = "error"
         jobs[job_id]["message"] = str(e)
+        jobs[job_id]["updated_at"] = time.time()
     finally:
         heartbeat_stop.set()
 

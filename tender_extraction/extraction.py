@@ -228,6 +228,11 @@ def load_model():
         logger.info("Loading LLM: %s", model_path)
         logger.info("llama.cpp GPU offload support: %s", gpu_supported)
         if not gpu_supported:
+            if config.llm.require_gpu:
+                raise RuntimeError(
+                    "GPU-only mode is enabled (REQUIRE_GPU=1), but llama.cpp GPU offload is unavailable. "
+                    "Fix CUDA/llama-cpp runtime in the active environment before running extraction."
+                )
             logger.warning(
                 "GPU offload is not available in the current Python environment; running on CPU."
             )

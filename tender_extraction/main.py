@@ -117,154 +117,164 @@ class TenderExtractionPipeline:
         path = Path(file_path)
         logger.info("=" * 60)
         logger.info("TenderExtractPro -- Processing: %s (%.1f MB)",
-                     path.name, path.stat().st_size / (1024 * 1024))
+                 path.name, path.stat().st_size / (1024 * 1024))
         logger.info("=" * 60)
 
-        # -- Stage 1: Ingestion ------------------------------------------------
-        t0 = time.time()
-        _update(5, "Ingesting document pages...")
-        logger.info("[1/6] Ingesting document ...")
-        pages = ingest_document(file_path)
-        logger.info(
-            "  Ingested: %d pages (%d text, %d OCR) in %.1fs",
-            len(pages),
-            sum(1 for p in pages if not p["is_ocr"]),
-            sum(1 for p in pages if p["is_ocr"]),
-            time.time() - t0,
-        )
-
-        # -- Stage 2: Table Extraction -----------------------------------------
-        t0 = time.time()
-        _update(20, "Extracting tables...")
-        logger.info("[2/6] Extracting tables ...")
-        tables = []
-        table_specs = []
-        if path.suffix.lower() == ".pdf":
-            tables = extract_tables(file_path)
-            for table in tables:
-                table_specs.extend(parse_table_to_specs(table))
-            logger.info("  Found: %d tables, %d table-specs in %.1fs",
-                        len(tables), len(table_specs), time.time() - t0)
-        else:
-            logger.info("  Skipped (non-PDF)")
-
-        # -- Stage 3: Chunking -------------------------------------------------
-        t0 = time.time()
-        _update(35, "Chunking document text...")
-        logger.info("[3/6] Creating chunks ...")
-        chunks = create_chunks(pages, tables)
-        logger.info("  Created: %d chunks in %.1fs", len(chunks), time.time() - t0)
-
-        if not chunks:
-            logger.warning("No chunks created. Returning empty result.")
-            return _empty_result(output_path)
-
-        # -- Stage 4: Retrieval ------------------------------------------------
-        t0 = time.time()
-        _update(45, "Building hybrid retrieval index...")
-        logger.info("[4/6] Building retrieval index + querying ...")
-        self._retriever = HybridRetriever(persist_dir=self._persist_dir)
-        collection_name = path.stem  # use filename without extension as collection ID
-        self._retriever.build_index(chunks, collection_name=collection_name, force_rebuild=self._force_reindex)
-
-        topic = discover_document_topic(pages)
-        spec_queries = [expand_query(q) for q in build_targeted_queries(topic)]
-        scope_queries = [
-            expand_query("scope of work tasks deliverables responsibilities obligations"),
-            expand_query("project timeline schedule completion delivery timeline milestones"),
-            expand_query("exclusions not included out of scope boundary limits vendor excluded"),
-            expand_query("contractor requirements obligations supply detailed tasks breakdown"),
-        ]
-
-        # Keep retrieved context focused to improve precision and reduce LLM latency.
-        spec_chunks = self._multi_query_retrieve(spec_queries, top_k=20, is_spec=True)
-        scope_chunks = self._multi_query_retrieve(scope_queries, top_k=12)
-        logger.info(
-            "  Retrieved: %d spec chunks, %d scope chunks in %.1fs",
-            len(spec_chunks), len(scope_chunks), time.time() - t0,
-        )
-
-        # -- Stage 5: LLM Extraction ------------------------------------------
-        t0 = time.time()
-        _update(60, "Running LLM extraction (this takes 1-3 min)...")
-        logger.info("[5/6] Running LLM extraction concurrently ...")
-
-        llm_specs = []
-        llm_scope = {"summary": "NOT_FOUND", "deliverables": [], "exclusions": [], "locations": [], "references": []}
-        
-        # NOTE: LLM inference is serialized by _llm_lock in extraction.py.
-        # Running in threads just adds overhead without true parallelism,
-        # so we run them sequentially for clarity and reliability.
         try:
-            _update(62, "LLM extracting technical specifications...")
-            llm_specs = extract_specifications(spec_chunks, topic)
-        except Exception as e:
-            logger.warning("Failed to extract specifications: %s", e)
 
-        try:
-            _update(78, "LLM extracting scope of work...")
-            llm_scope = extract_scope_of_work(scope_chunks, topic)
-        except Exception as e:
-            logger.warning("Failed to extract scope of work: %s", e)
+            # -- Stage 1: Ingestion --------------------------------------------
+            t0 = time.time()
+            _update(5, "Ingesting document pages...")
+            logger.info("[1/6] Ingesting document ...")
+            pages = ingest_document(file_path)
+            logger.info(
+                "  Ingested: %d pages (%d text, %d OCR) in %.1fs",
+                len(pages),
+                sum(1 for p in pages if not p["is_ocr"]),
+                sum(1 for p in pages if p["is_ocr"]),
+                time.time() - t0,
+            )
 
-        # Table-extracted specs come first because they're more reliable
-        # (structured column mapping vs. LLM generation)
-        all_specs = table_specs + llm_specs
-        logger.info(
-            "  Extracted: %d specs (%d table + %d LLM), %d deliverables in %.1fs",
-            len(all_specs), len(table_specs), len(llm_specs),
-            len(llm_scope.get("deliverables", [])), time.time() - t0,
-        )
-
-        # -- Stage 6: Validation -----------------------------------------------
-        t0 = time.time()
-        _update(90, "Validating and grounding extractions...")
-        logger.info("[6/6] Validating and grounding ...")
-
-        raw_result = {
-            "technical_specifications": all_specs,
-            "scope_of_work": llm_scope,
-        }
-
-        all_source_chunks = spec_chunks + scope_chunks
-        validated = validate_extractions(raw_result, all_source_chunks)
-
-        # Pydantic schema enforcement
-        try:
-            result_model = validate_schema(validated)
-            if hasattr(result_model, 'model_dump'):
-                final_result = result_model.model_dump()
+            # -- Stage 2: Table Extraction -------------------------------------
+            t0 = time.time()
+            _update(20, "Extracting tables...")
+            logger.info("[2/6] Extracting tables ...")
+            tables = []
+            table_specs = []
+            if path.suffix.lower() == ".pdf":
+                tables = extract_tables(file_path)
+                for table in tables:
+                    table_specs.extend(parse_table_to_specs(table))
+                logger.info("  Found: %d tables, %d table-specs in %.1fs",
+                            len(tables), len(table_specs), time.time() - t0)
             else:
-                final_result = result_model.dict()
-        except Exception as exc:
-            logger.warning("Pydantic validation issue: %s. Using raw result.", exc)
-            final_result = validated
+                logger.info("  Skipped (non-PDF)")
 
-        logger.info("  Validation complete in %.1fs", time.time() - t0)
+            # -- Stage 3: Chunking ---------------------------------------------
+            t0 = time.time()
+            _update(35, "Chunking document text...")
+            logger.info("[3/6] Creating chunks ...")
+            chunks = create_chunks(pages, tables)
+            logger.info("  Created: %d chunks in %.1fs", len(chunks), time.time() - t0)
 
-        # -- Summary -----------------------------------------------------------
-        elapsed = time.time() - overall_start
-        n_specs = len(final_result.get("technical_specifications", []))
-        n_deliverables = len(final_result.get("scope_of_work", {}).get("deliverables", []))
-        n_excl = len(final_result.get("scope_of_work", {}).get("exclusions", []))
-        acc_score = final_result.get("accuracy_score", 0.0)
+            if not chunks:
+                logger.warning("No chunks created. Returning empty result.")
+                return _empty_result(output_path)
 
-        logger.info("=" * 60)
-        logger.info("DONE in %.1fs", elapsed)
-        logger.info("  Specs:       %d", n_specs)
-        logger.info("  Deliverables:%d", n_deliverables)
-        logger.info("  Exclusions:  %d", n_excl)
-        logger.info("  Accuracy:    %.2f%%", acc_score)
-        logger.info("=" * 60)
+            # -- Stage 4: Retrieval --------------------------------------------
+            t0 = time.time()
+            _update(45, "Building hybrid retrieval index...")
+            logger.info("[4/6] Building retrieval index + querying ...")
+            self._retriever = HybridRetriever(persist_dir=self._persist_dir)
+            collection_name = path.stem  # use filename without extension as collection ID
+            self._retriever.build_index(chunks, collection_name=collection_name, force_rebuild=self._force_reindex)
 
-        # Write output
-        if output_path:
-            os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(final_result, f, indent=2, ensure_ascii=False)
-            logger.info("Output written to: %s", output_path)
+            topic = discover_document_topic(pages)
+            spec_queries = [expand_query(q) for q in build_targeted_queries(topic)]
+            scope_queries = [
+                expand_query("scope of work tasks deliverables responsibilities obligations"),
+                expand_query("project timeline schedule completion delivery timeline milestones"),
+                expand_query("exclusions not included out of scope boundary limits vendor excluded"),
+                expand_query("contractor requirements obligations supply detailed tasks breakdown"),
+            ]
 
-        return final_result
+            # Keep retrieved context focused to improve precision and reduce LLM latency.
+            spec_chunks = self._multi_query_retrieve(spec_queries, top_k=20, is_spec=True)
+            scope_chunks = self._multi_query_retrieve(scope_queries, top_k=12)
+            logger.info(
+                "  Retrieved: %d spec chunks, %d scope chunks in %.1fs",
+                len(spec_chunks), len(scope_chunks), time.time() - t0,
+            )
+
+            # -- Stage 5: LLM Extraction --------------------------------------
+            t0 = time.time()
+            _update(60, "Running LLM extraction (this takes 1-3 min)...")
+            logger.info("[5/6] Running LLM extraction concurrently ...")
+
+            llm_specs = []
+            llm_scope = {"summary": "NOT_FOUND", "deliverables": [], "exclusions": [], "locations": [], "references": []}
+        
+            # NOTE: LLM inference is serialized by _llm_lock in extraction.py.
+            # Running in threads just adds overhead without true parallelism,
+            # so we run them sequentially for clarity and reliability.
+            try:
+                _update(62, "LLM extracting technical specifications...")
+                llm_specs = extract_specifications(spec_chunks, topic)
+            except Exception as e:
+                if config.llm.require_gpu:
+                    raise
+                logger.warning("Failed to extract specifications: %s", e)
+
+            try:
+                _update(78, "LLM extracting scope of work...")
+                llm_scope = extract_scope_of_work(scope_chunks, topic)
+            except Exception as e:
+                if config.llm.require_gpu:
+                    raise
+                logger.warning("Failed to extract scope of work: %s", e)
+
+            # Table-extracted specs come first because they're more reliable
+            # (structured column mapping vs. LLM generation)
+            all_specs = table_specs + llm_specs
+            logger.info(
+                "  Extracted: %d specs (%d table + %d LLM), %d deliverables in %.1fs",
+                len(all_specs), len(table_specs), len(llm_specs),
+                len(llm_scope.get("deliverables", [])), time.time() - t0,
+            )
+
+            # -- Stage 6: Validation -------------------------------------------
+            t0 = time.time()
+            _update(90, "Validating and grounding extractions...")
+            logger.info("[6/6] Validating and grounding ...")
+
+            raw_result = {
+                "technical_specifications": all_specs,
+                "scope_of_work": llm_scope,
+            }
+
+            all_source_chunks = spec_chunks + scope_chunks
+            validated = validate_extractions(raw_result, all_source_chunks)
+
+            # Pydantic schema enforcement
+            try:
+                result_model = validate_schema(validated)
+                if hasattr(result_model, 'model_dump'):
+                    final_result = result_model.model_dump()
+                else:
+                    final_result = result_model.dict()
+            except Exception as exc:
+                logger.warning("Pydantic validation issue: %s. Using raw result.", exc)
+                final_result = validated
+
+            logger.info("  Validation complete in %.1fs", time.time() - t0)
+
+            # -- Summary -------------------------------------------------------
+            elapsed = time.time() - overall_start
+            n_specs = len(final_result.get("technical_specifications", []))
+            n_deliverables = len(final_result.get("scope_of_work", {}).get("deliverables", []))
+            n_excl = len(final_result.get("scope_of_work", {}).get("exclusions", []))
+            acc_score = final_result.get("accuracy_score", 0.0)
+
+            logger.info("=" * 60)
+            logger.info("DONE in %.1fs", elapsed)
+            logger.info("  Specs:       %d", n_specs)
+            logger.info("  Deliverables:%d", n_deliverables)
+            logger.info("  Exclusions:  %d", n_excl)
+            logger.info("  Accuracy:    %.2f%%", acc_score)
+            logger.info("=" * 60)
+
+            # Write output
+            if output_path:
+                os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
+                with open(output_path, "w", encoding="utf-8") as f:
+                    json.dump(final_result, f, indent=2, ensure_ascii=False)
+                logger.info("Output written to: %s", output_path)
+
+            return final_result
+        finally:
+            if self._retriever is not None:
+                self._retriever.close()
+                self._retriever = None
 
     def _multi_query_retrieve(
         self,

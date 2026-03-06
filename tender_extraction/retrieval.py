@@ -58,8 +58,16 @@ def _resolve_torch_device() -> str:
     """Return 'cuda' when available, else 'cpu'."""
     try:
         import torch
-        return "cuda" if torch.cuda.is_available() else "cpu"
+        cuda_ok = bool(torch.cuda.is_available())
+        if config.retrieval.require_gpu and not cuda_ok:
+            raise RuntimeError(
+                "GPU-only mode is enabled (REQUIRE_GPU=1), but PyTorch CUDA is not available. "
+                "Install a CUDA-enabled torch build in the active environment."
+            )
+        return "cuda" if cuda_ok else "cpu"
     except Exception:
+        if config.retrieval.require_gpu:
+            raise
         return "cpu"
 
 # BGE asymmetric instruction used at query time only (not at index time)
@@ -126,6 +134,13 @@ class HybridRetriever:
         self._collection_name: Optional[str] = None
 
         logger.info("Qdrant local client initialised at: %s", persist_path)
+
+    def close(self) -> None:
+        """Explicitly close local Qdrant resources."""
+        try:
+            self._qdrant.close()
+        except Exception:
+            pass
 
     # â”€â”€ Index building â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 

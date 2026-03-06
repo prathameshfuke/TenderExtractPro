@@ -133,6 +133,18 @@ export default function ResultViewer({ job }) {
 
   if (!job) return null;
 
+  const progress = Number(job.progress || 0);
+  const startedAt = Number(job.started_at || 0);
+  const now = Number(job.updated_at || job.started_at || 0);
+  let etaText = '';
+  if (job.status === 'running' && startedAt > 0 && now >= startedAt && progress > 0 && progress < 100) {
+    const elapsed = Math.max(1, now - startedAt);
+    const rate = progress / elapsed;
+    if (rate > 0.05) {
+      etaText = `ETA ${Math.ceil((100 - progress) / rate)}s`;
+    }
+  }
+
   if (job.status !== 'done') {
     return (
       <div className="empty-state">
@@ -149,9 +161,12 @@ export default function ResultViewer({ job }) {
                 <span className={`badge ${job.status}`}>{job.status}</span>
               </div>
               <h3>Processing document</h3>
-              <p className="job-message" style={{ marginTop: '10px' }}>{job.message}</p>
-              <div className="progress-track" style={{ marginTop: '20px', width: '320px' }}>
-                <div className="progress-fill" style={{ width: `${job.progress || 0}%`, transition: 'width 0.5s ease' }} />
+              <p className="job-message" style={{ marginTop: '10px', maxWidth: '640px' }}>{job.message}</p>
+              <div className="progress-track" style={{ marginTop: '20px', width: '420px', height: '8px' }}>
+                <div className="progress-fill" style={{ width: `${progress}%`, transition: 'width 0.5s ease' }} />
+              </div>
+              <div style={{ marginTop: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>
+                {progress}% {etaText ? `- ${etaText}` : ''}
               </div>
             </>
           )}

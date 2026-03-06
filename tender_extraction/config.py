@@ -88,6 +88,7 @@ class RetrievalConfig:
     rerank_top_k: int = 40
     top_k: int = 10
     qdrant_path: str = "./qdrant_storage"
+    require_gpu: bool = os.getenv("REQUIRE_GPU", "1") == "1"
 
 
 @dataclass
@@ -107,6 +108,7 @@ class LLMConfig:
     n_ctx: int = 4096
     n_threads: Optional[int] = 8
     n_gpu_layers: int = -1
+    require_gpu: bool = os.getenv("REQUIRE_GPU", "1") == "1"
     max_tokens: int = 512
     temperature: float = 0.05
     top_p: float = 0.9

@@ -120,21 +120,22 @@ if __name__ == "__main__":
         print("Test 3 passed: empty component rejected")
 
 
-    # Test 3: full ExtractionResult round-trip
+    # Test 4: full ExtractionResult round-trip
     result = ExtractionResult(
         technical_specifications=[spec],
         scope_of_work=ScopeOfWork(
-            tasks=[ScopeTask(
-                task_description="Site prep",
-                source=SourceCitation(chunk_id="c2", page=8),
-            )],
+            summary="Install and commission HVAC units",
+            deliverables=["Site prep", "Supply and installation"],
+            exclusions=["Civil work"],
+            locations=["Building A"],
+            references=["Clause 2"],
         ),
         accuracy_score=95.5,
     )
-    data = result.dict()
+    data = result.model_dump()
     assert len(data["technical_specifications"]) == 1
-    assert data["scope_of_work"]["tasks"][0]["timeline"] == "NOT_FOUND"
+    assert data["scope_of_work"]["deliverables"][0] == "Site prep"
     assert data["accuracy_score"] == 95.5
-    print("Test 3 passed: full ExtractionResult round-trip")
+    print("Test 4 passed: full ExtractionResult round-trip")
 
     print("\nAll schema tests passed.")
