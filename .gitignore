@@ -18,3 +18,9 @@ build/
 # Frontend build artifacts
 frontend/dist/
 frontend/node_modules/
+
+# Generated evaluation and project reports
+outputs/eval_*.json
+outputs/dataset_eval_report.json
+outputs/dataset_eval_report.md
+outputs/project_report.md

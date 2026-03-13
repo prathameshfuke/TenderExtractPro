@@ -3,6 +3,7 @@ import axios from 'axios';
 import { XCircle } from 'lucide-react';
 import SpecsTable from './SpecsTable';
 import ScopePanel from './ScopePanel';
+import ChatPanel from './ChatPanel';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -80,12 +81,14 @@ export default function ResultViewer({ job }) {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('specs');
   const [error, setError] = useState(null);
+  const jobId = job?.job_id || null;
+  const jobStatus = job?.status || null;
 
   useEffect(() => {
     let cancelled = false;
 
     const loadResult = async () => {
-      if (!job || job.status !== 'done') {
+      if (!jobId || jobStatus !== 'done') {
         setResult(null);
         setError(null);
         return;
@@ -94,7 +97,7 @@ export default function ResultViewer({ job }) {
       setLoading(true);
       setError(null);
       try {
-        const res = await api.get(`/jobs/${job.job_id}/result`);
+        const res = await api.get(`/jobs/${jobId}/result`);
         if (!cancelled) {
           setResult(res.data);
         }
@@ -114,7 +117,7 @@ export default function ResultViewer({ job }) {
     return () => {
       cancelled = true;
     };
-  }, [job?.job_id, job?.status]);
+  }, [jobId, jobStatus]);
 
   const specs = useMemo(
     () => normalizeSpecs(result?.technical_specifications || []),
@@ -211,9 +214,14 @@ export default function ResultViewer({ job }) {
         <div className={`tab ${activeTab === 'scope' ? 'active' : ''}`} onClick={() => setActiveTab('scope')}>
           Scope of Work
         </div>
+        <div className={`tab ${activeTab === 'qa' ? 'active' : ''}`} onClick={() => setActiveTab('qa')}>
+          Ask Document
+        </div>
       </div>
 
-      {activeTab === 'specs' ? <SpecsTable specs={specs} /> : <ScopePanel scope={scope} />}
+      {activeTab === 'specs' && <SpecsTable specs={specs} />}
+      {activeTab === 'scope' && <ScopePanel scope={scope} />}
+      {activeTab === 'qa' && <ChatPanel job={job} />}
     </div>
   );
 }

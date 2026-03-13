@@ -141,6 +141,39 @@ def extract_tables(pdf_path: str) -> List[Dict[str, Any]]:
 
 SPEC_TABLE_MIN_PAGE = 15  # Skip tables before this page — they're admin/legal
 
+
+def _looks_like_serial_label(text: str) -> bool:
+    cleaned = re.sub(r"[\s().-]+", "", (text or "").strip())
+    return bool(cleaned) and cleaned.isdigit()
+
+
+def _clean_spec_text(text: str) -> str:
+    text = re.sub(r"^[\s\u2022\uf0b7\-•]+", "", text or "").strip()
+    text = re.sub(r"^([A-Za-z])\s+([A-Za-z]{2,})", r"\1\2", text)
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _derive_component_and_spec(item_name: str, spec_text: str) -> tuple[str, str]:
+    item_name = _clean_spec_text(item_name)
+    spec_text = _clean_spec_text(spec_text)
+
+    if _looks_like_serial_label(item_name) and ":" in spec_text:
+        lhs, rhs = spec_text.split(":", 1)
+        lhs = _clean_spec_text(lhs)
+        rhs = _clean_spec_text(rhs)
+        if lhs and any(c.isalpha() for c in lhs):
+            return lhs[:80], rhs or spec_text
+
+    if _looks_like_serial_label(item_name) and spec_text:
+        snippet = spec_text.split(".", 1)[0]
+        snippet = snippet.split(";", 1)[0]
+        snippet = snippet.split(":", 1)[0]
+        snippet = _clean_spec_text(snippet)
+        if len(snippet) >= 6 and any(c.isalpha() for c in snippet):
+            return snippet[:80], spec_text
+
+    return item_name or "NOT_FOUND", spec_text or "NOT_FOUND"
+
 def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Convert a structured table into a list of specification dicts.
@@ -227,6 +260,9 @@ def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
 
         item_name_str = str(spec["item_name"]).strip()
         spec_text_str = str(spec["specification_text"]).strip()
+        item_name_str, spec_text_str = _derive_component_and_spec(item_name_str, spec_text_str)
+        spec["item_name"] = item_name_str
+        spec["specification_text"] = spec_text_str
 
         # Reject rows that are clearly narrative/legal prose instead of
         # compact technical entries.

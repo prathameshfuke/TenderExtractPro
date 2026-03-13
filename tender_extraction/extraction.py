@@ -110,6 +110,23 @@ _SCOPE_INSTRUCTIONS = (
     "TENDER TEXT:\n{context}"
 )
 
+_QA_SYSTEM = (
+    "You answer questions about one tender document using ONLY the provided evidence. "
+    "If the answer is not explicitly supported, say that it is not found in the document. "
+    "Return ONLY valid JSON."
+)
+
+_QA_INSTRUCTIONS = (
+    'Return JSON with keys "answer", "citations", and "confidence".\n'
+    '- "answer": short grounded answer in plain English.\n'
+    '- "citations": array of objects with "page", "chunk_id", and "quote". Use up to 3 citations.\n'
+    '- "confidence": one of HIGH, MEDIUM, LOW.\n\n'
+    'If the answer is not present, set "answer" to "NOT_FOUND in provided document context" and use an empty citations array.\n\n'
+    'QUESTION:\n{question}\n\n'
+    'DOCUMENT TOPIC:\n{topic}\n\n'
+    'DOCUMENT EVIDENCE:\n{context}'
+)
+
 
 def _count_tokens(text: str) -> int:
     """Estimate token count for context budget calculations."""
@@ -239,7 +256,7 @@ def load_model():
         _llm_instance = Llama(
             model_path=model_path,
             n_ctx=config.llm.n_ctx,
-            n_gpu_layers=-1,
+            n_gpu_layers=config.llm.n_gpu_layers,
             n_threads=config.llm.n_threads,
             verbose=False
         )
@@ -347,6 +364,48 @@ def _repair_json(raw: str) -> str:
     return raw
 
 
+def _salvage_json_objects(raw: str, array_key: str) -> List[Dict[str, Any]]:
+    """Recover individual JSON objects from a malformed array payload."""
+    key_pos = raw.find(f'"{array_key}"')
+    if key_pos == -1:
+        return []
+
+    array_start = raw.find("[", key_pos)
+    if array_start == -1:
+        return []
+
+    recovered: List[Dict[str, Any]] = []
+    depth = 0
+    object_start: Optional[int] = None
+
+    for idx in range(array_start, len(raw)):
+        char = raw[idx]
+        if char == "{":
+            if depth == 0:
+                object_start = idx
+            depth += 1
+        elif char == "}" and depth > 0:
+            depth -= 1
+            if depth == 0 and object_start is not None:
+                candidate = raw[object_start:idx + 1]
+                try:
+                    recovered.append(json.loads(candidate))
+                except json.JSONDecodeError:
+                    candidate = re.sub(
+                        r":\s*(true|false)(\s*[},])",
+                        lambda m: ': "' + m.group(1).upper() + '"' + m.group(2),
+                        candidate,
+                        flags=re.IGNORECASE,
+                    )
+                    try:
+                        recovered.append(json.loads(candidate))
+                    except json.JSONDecodeError:
+                        pass
+                object_start = None
+
+    return recovered
+
+
 def extract_specifications(
     retrieved_chunks: List[Dict[str, Any]],
     topic: str = "",
@@ -381,6 +440,14 @@ def extract_specifications(
             if isinstance(specs, list):
                 all_specs.extend(specs)
         except json.JSONDecodeError as exc:
+            salvaged_specs = _salvage_json_objects(repaired, "technical_specifications")
+            if salvaged_specs:
+                logger.warning(
+                    "Spec batch %d JSON parse error: %s. Salvaged %d spec objects.",
+                    batch_idx + 1, exc, len(salvaged_specs),
+                )
+                all_specs.extend(salvaged_specs)
+                continue
             logger.error(
                 "Spec batch %d JSON parse error: %s\nRaw (first 400): %s",
                 batch_idx + 1, exc, raw[:400],
@@ -487,6 +554,72 @@ def build_scope_prompt(context: str, topic: str = "") -> str:
         + _USER_OPEN + "\n" + user_msg + _TAG_END + "\n"
         + _ASST_OPEN
     )
+
+
+def build_qa_prompt(question: str, context: str, topic: str = "") -> str:
+    user_msg = _QA_INSTRUCTIONS.replace("{question}", question).replace("{topic}", topic or "NOT_FOUND").replace("{context}", context)
+    return (
+        _SYS_OPEN + "\n" + _QA_SYSTEM + _TAG_END + "\n"
+        + _USER_OPEN + "\n" + user_msg + _TAG_END + "\n"
+        + _ASST_OPEN
+    )
+
+
+def answer_question(
+    retrieved_chunks: List[Dict[str, Any]],
+    question: str,
+    topic: str = "",
+) -> Dict[str, Any]:
+    if not retrieved_chunks:
+        return {
+            "answer": "NOT_FOUND in provided document context",
+            "citations": [],
+            "confidence": "LOW",
+        }
+
+    llm = load_model()
+    context = _build_context(retrieved_chunks[:8])
+    prompt = build_qa_prompt(question, context, topic)
+    raw = _call_llm(llm, prompt, "Answering question")
+    repaired = _repair_json(raw)
+
+    fallback_citations = [
+        {
+            "page": item["chunk"].metadata.page,
+            "chunk_id": item["chunk"].chunk_id,
+            "quote": item["chunk"].text[:220],
+        }
+        for item in retrieved_chunks[:3]
+    ]
+
+    try:
+        parsed = json.loads(repaired)
+    except json.JSONDecodeError:
+        return {
+            "answer": raw.strip() or "NOT_FOUND in provided document context",
+            "citations": fallback_citations,
+            "confidence": "LOW",
+        }
+
+    citations = parsed.get("citations", [])
+    normalized_citations = []
+    if isinstance(citations, list):
+        for citation in citations[:3]:
+            if not isinstance(citation, dict):
+                continue
+            normalized_citations.append(
+                {
+                    "page": int(citation.get("page", 0) or 0),
+                    "chunk_id": str(citation.get("chunk_id", "NOT_FOUND")),
+                    "quote": str(citation.get("quote", "NOT_FOUND")),
+                }
+            )
+
+    return {
+        "answer": str(parsed.get("answer", "NOT_FOUND in provided document context")).strip() or "NOT_FOUND in provided document context",
+        "citations": normalized_citations or fallback_citations,
+        "confidence": str(parsed.get("confidence", "LOW")).upper(),
+    }
 
 
 # -- Context building -------------------------------------------------------

@@ -21,6 +21,34 @@ from tender_extraction.schemas import Chunk, ExtractionResult
 logger = logging.getLogger(__name__)
 
 
+def _coerce_specs_map(values: Dict[str, Any]) -> Dict[str, str]:
+    coerced: Dict[str, str] = {}
+    for key, value in (values or {}).items():
+        if value is None:
+            continue
+        value_str = str(value).strip()
+        if value_str and value_str != "NOT_FOUND":
+            coerced[str(key)] = value_str
+    return coerced
+
+
+def _normalize_component_value(component: Any, specs_map: Dict[str, str]) -> str:
+    component_str = str(component or "").strip()
+    cleaned = component_str.strip()
+    serial_like = cleaned.replace(".", "", 1).isdigit() if cleaned else False
+    if cleaned and not serial_like and any(c.isalpha() for c in cleaned):
+        return cleaned
+
+    spec_text = specs_map.get("specification") or specs_map.get("specification_text") or ""
+    if ":" in spec_text:
+        lhs = spec_text.split(":", 1)[0].strip(" -•\t")
+        if len(lhs) >= 4 and any(c.isalpha() for c in lhs):
+            return lhs[:80]
+    if spec_text:
+        return spec_text[:80].strip()
+    return cleaned or "NOT_FOUND"
+
+
 def verify_grounding(
     spec: Dict[str, Any],
     source_chunks: List[Dict[str, Any]],
@@ -183,7 +211,19 @@ def _normalize_spec_shape(spec: Dict[str, Any]) -> Dict[str, Any]:
       component, specs (dict), source, confidence
     """
     if "component" in spec and isinstance(spec.get("specs"), dict):
-        return spec
+        specs_map = _coerce_specs_map(spec.get("specs", {}))
+        source = spec.get("source") if isinstance(spec.get("source"), dict) else {}
+        return {
+            "component": _normalize_component_value(spec.get("component"), specs_map),
+            "specs": specs_map,
+            "source": {
+                "chunk_id": source.get("chunk_id", "NOT_FOUND"),
+                "page": int(source.get("page", 0) or 0),
+                "clause": source.get("clause", "NOT_FOUND"),
+                "exact_text": source.get("exact_text", "NOT_FOUND"),
+            },
+            "confidence": float(spec.get("confidence", 0.5)) if isinstance(spec.get("confidence"), (int, float)) else 0.5,
+        }
 
     component = str(spec.get("component") or spec.get("item_name") or "NOT_FOUND").strip()
     if not component:
@@ -218,8 +258,8 @@ def _normalize_spec_shape(spec: Dict[str, Any]) -> Dict[str, Any]:
 
     source = spec.get("source") if isinstance(spec.get("source"), dict) else {}
     normalized = {
-        "component": component,
-        "specs": specs_dict,
+        "component": _normalize_component_value(component, specs_dict),
+        "specs": _coerce_specs_map(specs_dict),
         "source": {
             "chunk_id": source.get("chunk_id", "NOT_FOUND"),
             "page": int(source.get("page", 0) or 0),

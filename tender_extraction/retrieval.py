@@ -28,6 +28,7 @@ from __future__ import annotations
 import logging
 import io
 import contextlib
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -48,6 +49,21 @@ from tender_extraction.config import config
 from tender_extraction.schemas import Chunk
 
 logger = logging.getLogger(__name__)
+
+_SPEC_SECTION_TERMS = (
+    "specification", "technical", "parameter", "requirement", "compliance", "material", "performance",
+)
+_SCOPE_SECTION_TERMS = (
+    "scope", "work", "deliverable", "timeline", "schedule", "responsibil", "obligation", "exclusion",
+)
+_SPEC_TEXT_TERMS = re.compile(
+    r"\b(astm|iso|bis|is\s*[:\-]|minimum|maximum|tolerance|voltage|current|capacity|size|diameter|temperature|pressure|grade)\b",
+    re.IGNORECASE,
+)
+_SCOPE_TEXT_TERMS = re.compile(
+    r"\b(shall|must|deliver|supply|install|commission|timeline|schedule|exclude|location|site|responsib)\w*\b",
+    re.IGNORECASE,
+)
 
 # â”€â”€ Singleton model caches â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 _embed_model: Optional[SentenceTransformer] = None
@@ -383,15 +399,55 @@ class HybridRetriever:
         for r in results:
             ch = r["chunk"]
             if ch.metadata.chunk_type == "table":
-                r["score"] = min(1.0, r["score"] * 1.25)
-            if ch.metadata.page > 15:
-                r["score"] = min(1.0, r["score"] * 1.10)
+                r["score"] = min(1.0, r["score"] * 1.12)
             sec = (ch.metadata.section or "").lower()
-            if any(
-                kw in sec
-                for kw in ("specification", "technical", "parameter", "requirement")
-            ):
-                r["score"] = min(1.0, r["score"] * 1.15)
+            if any(term in sec for term in _SPEC_SECTION_TERMS):
+                r["score"] = min(1.0, r["score"] * 1.12)
+            if _SPEC_TEXT_TERMS.search(ch.text):
+                r["score"] = min(1.0, r["score"] * 1.10)
+            if any(char.isdigit() for char in ch.text) and ":" in ch.text:
+                r["score"] = min(1.0, r["score"] * 1.06)
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:top_k]
+
+    def retrieve_scope_chunks(
+        self, query: str, top_k: int = 12
+    ) -> List[Dict[str, Any]]:
+        """Scope-focused retrieval that prefers narrative and obligation-heavy chunks."""
+        results = self.retrieve(query, top_k=top_k * 2, section_filter=None)
+
+        for result in results:
+            chunk = result["chunk"]
+            section = (chunk.metadata.section or "").lower()
+            if chunk.metadata.chunk_type in {"paragraph", "list"}:
+                result["score"] = min(1.0, result["score"] * 1.08)
+            if any(term in section for term in _SCOPE_SECTION_TERMS):
+                result["score"] = min(1.0, result["score"] * 1.14)
+            if _SCOPE_TEXT_TERMS.search(chunk.text):
+                result["score"] = min(1.0, result["score"] * 1.08)
+
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:top_k]
+
+    def retrieve_question_chunks(
+        self, query: str, top_k: int = 8
+    ) -> List[Dict[str, Any]]:
+        """Balanced retrieval for open-ended document Q&A."""
+        results = self.retrieve(query, top_k=top_k * 3, section_filter=None)
+        query_terms = {token for token in re.findall(r"[a-zA-Z0-9]{3,}", query.lower())}
+
+        for result in results:
+            chunk = result["chunk"]
+            text_lower = chunk.text.lower()
+            section = (chunk.metadata.section or "").lower()
+            overlap = sum(1 for token in query_terms if token in text_lower)
+            if overlap:
+                result["score"] = min(1.0, result["score"] * (1.0 + min(0.12, 0.03 * overlap)))
+            if any(token in section for token in query_terms):
+                result["score"] = min(1.0, result["score"] * 1.06)
+            if chunk.metadata.chunk_type == "table" and any(char.isdigit() for char in query):
+                result["score"] = min(1.0, result["score"] * 1.05)
 
         results.sort(key=lambda x: x["score"], reverse=True)
         return results[:top_k]

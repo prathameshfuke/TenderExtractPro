@@ -180,7 +180,7 @@ class TenderExtractionPipeline:
 
             # Keep retrieved context focused to improve precision and reduce LLM latency.
             spec_chunks = self._multi_query_retrieve(spec_queries, top_k=20, is_spec=True)
-            scope_chunks = self._multi_query_retrieve(scope_queries, top_k=12)
+            scope_chunks = self._multi_query_retrieve(scope_queries, top_k=12, mode="scope")
             logger.info(
                 "  Retrieved: %d spec chunks, %d scope chunks in %.1fs",
                 len(spec_chunks), len(scope_chunks), time.time() - t0,
@@ -281,6 +281,7 @@ class TenderExtractionPipeline:
         queries: List[str],
         top_k: int = 10,
         is_spec: bool = False,
+        mode: str = "generic",
     ) -> List[Dict[str, Any]]:
         """
         Run multiple retrieval queries and deduplicate by chunk_id.
@@ -290,8 +291,10 @@ class TenderExtractionPipeline:
         results = []
 
         for query in queries:
-            if is_spec:
+            if is_spec or mode == "spec":
                 hits = self._retriever.retrieve_spec_chunks(query, top_k=top_k)
+            elif mode == "scope":
+                hits = self._retriever.retrieve_scope_chunks(query, top_k=top_k)
             else:
                 hits = self._retriever.retrieve(query, top_k=top_k)
             for hit in hits:

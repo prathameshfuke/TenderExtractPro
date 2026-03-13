@@ -1,6 +1,7 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 import asyncio, uuid, json, os, threading
 import time
 from pathlib import Path
@@ -11,8 +12,13 @@ app.add_middleware(CORSMiddleware,
     allow_methods=["*"], allow_headers=["*"])
 
 jobs = {}  # job_id -> {status, progress, message, filename, result_path}
+chat_sessions = {}
 UPLOAD_DIR = Path("uploads"); UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR = Path("outputs"); OUTPUT_DIR.mkdir(exist_ok=True)
+
+
+class AskRequest(BaseModel):
+    question: str
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
@@ -25,7 +31,8 @@ async def upload(file: UploadFile = File(...)):
         "status": "queued", "progress": 0,
         "message": "Queued", "filename": file.filename,
         "job_id": job_id, "result_path": None,
-        "created_at": now, "started_at": None, "updated_at": now
+        "created_at": now, "started_at": None, "updated_at": now,
+        "pdf_path": str(pdf_path),
     }
     thread = threading.Thread(
         target=run_pipeline_sync, 
@@ -107,12 +114,50 @@ def get_result(job_id: str):
         return {"error": "not ready"}
     return json.loads(Path(job["result_path"]).read_text())
 
+
+@app.post("/jobs/{job_id}/ask")
+def ask_document(job_id: str, payload: AskRequest):
+    job = jobs.get(job_id)
+    if not job:
+        return {"error": "not found"}
+
+    question = (payload.question or "").strip()
+    if not question:
+        return {"error": "question is required"}
+
+    pdf_path = job.get("pdf_path")
+    if not pdf_path or not Path(pdf_path).exists():
+        return {"error": "source document is unavailable"}
+
+    session = chat_sessions.get(job_id)
+    if session is None:
+        import sys; sys.path.insert(0, ".")
+        from tender_extraction.qa import DocumentChatSession
+
+        session = DocumentChatSession(
+            pdf_path,
+            persist_dir=str(OUTPUT_DIR / "_qa_qdrant_storage"),
+            force_reindex=False,
+        )
+        chat_sessions[job_id] = session
+
+    try:
+        return session.ask(question)
+    except Exception as exc:
+        return {"error": str(exc)}
+
 @app.get("/jobs")
 def list_jobs():
     return list(jobs.values())
 
 @app.delete("/jobs/{job_id}")
 def delete_job(job_id: str):
+    session = chat_sessions.pop(job_id, None)
+    if session is not None:
+        try:
+            session.close()
+        except Exception:
+            pass
     if job_id in jobs:
         del jobs[job_id]
     return {"deleted": job_id}
