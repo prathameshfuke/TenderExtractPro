@@ -20,7 +20,16 @@ frontend/dist/
 frontend/node_modules/
 
 # Generated evaluation and project reports
-outputs/eval_*.json
-outputs/dataset_eval_report.json
-outputs/dataset_eval_report.md
-outputs/project_report.md
+outputs/
+
+# API Keys and Secrets
+.env
+.env.*
+
+# Uploads and temporary data
+uploads/
+qdrant_storage/
+_test_qdrant_db/
+company_profile.json
+node_modules/
+.pytest_cache/
