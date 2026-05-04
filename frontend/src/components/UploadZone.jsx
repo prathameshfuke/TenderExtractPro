@@ -47,6 +47,7 @@ export default function UploadZone({ onUploadComplete }) {
             onDragLeave={(e) => { e.preventDefault(); setIsDragging(false); }}
             onDrop={onDrop}
             onClick={() => fileInputRef.current.click()}
+            id="sidebar-upload-trigger"
         >
             <input
                 type="file"
@@ -58,9 +59,11 @@ export default function UploadZone({ onUploadComplete }) {
                     e.target.value = '';
                 }}
             />
-            <Upload size={24} className="upload-icon mx-auto mb-2" />
-            <div style={{ marginTop: "10px" }}><strong>Upload Tender PDF</strong></div>
-            <p>Drag and drop or click to browse</p>
+            <Upload size={20} className="upload-icon" />
+            <p>Upload Tender Document</p>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted-soft)', display: 'block', marginTop: '4px' }}>
+                PDF formats only
+            </span>
         </div>
     );
 }

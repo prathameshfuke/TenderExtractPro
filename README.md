@@ -33,8 +33,13 @@ A production-grade RAG pipeline for extracting technical specifications and scop
   <img src="assets/parameter_map.png" width="45%" alt="Parameter Map" />
   <br><br>
 
-  <p><strong>Interactive Document Q&A</strong></p>
-  <img src="assets/document_qa.png" width="80%" alt="Document Q&A" />
+  <p><strong>Match Score & Ranking Analysis</strong></p>
+  <img src="assets/tender_match_analysis.png" width="80%" alt="Match Score Analysis" />
+  <br><br>
+
+  <p><strong>Interactive Document Q&A with AI Assistant</strong></p>
+  <img src="assets/ask_document_chat.png" width="80%" alt="Ask Document Q&A" />
+  <img src="assets/document_qa.png" width="80%" alt="Document Q&A Interface" />
 </div>
 
 ## Architecture
@@ -150,6 +155,14 @@ All tunable parameters are centralized in `tender_extraction/config.py`. Key set
 | `retrieval.embedding_weight` | 0.6 | Embedding weight in score fusion |
 | `llm.temperature` | 0.1 | LLM generation temperature |
 | `validation.min_grounding_ratio` | 0.40 | Minimum grounding score to accept a spec |
+
+## Contributors
+
+A big thank you to our contributors! 🙌
+
+- **[Gaurav Varu](https://github.com/gauravvaru)** - Fix: Preserve filtered components in scoring logic ([#1](https://github.com/prathameshfuke/TenderExtractPro/pull/1))
+
+See [CONTRIBUTORS.md](CONTRIBUTORS.md) for more details.
 
 ## License
 

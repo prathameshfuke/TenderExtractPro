@@ -54,46 +54,37 @@ export default function ChatPanel({ job }) {
   return (
     <div className="chat-panel">
       <div className="chat-header">
-        <div>
-          <h3>Ask The Document</h3>
-          <p>Answers are grounded only in retrieved chunks from this tender.</p>
-        </div>
-        <MessageSquareText size={18} />
+        <h3>Ask the Document</h3>
+        <p>Grounded in the retrieved segments of this tender.</p>
       </div>
 
-      {messages.length === 0 && (
-        <div className="chat-starters">
-          {starterQuestions.map((item) => (
-            <button key={item} className="chat-chip" type="button" onClick={() => askQuestion(item)}>
-              {item}
-            </button>
-          ))}
-        </div>
-      )}
-
       <div className="chat-thread">
+        {messages.length === 0 && (
+          <div className="chat-starters" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', marginBottom: '24px' }}>
+            {starterQuestions.map((item) => (
+              <button key={item} className="outline-pill" style={{ padding: '8px 16px', fontSize: '13px' }} type="button" onClick={() => askQuestion(item)}>
+                {item}
+              </button>
+            ))}
+          </div>
+        )}
+
         {messages.map((message, index) => (
           <div key={`${message.role}-${index}`} className={`chat-message ${message.role}`}>
+            <span className="chat-role">{message.role === 'user' ? 'You' : 'TenderExtractPro'}</span>
             <div className="chat-bubble">
-              <div className="chat-role">{message.role === 'user' ? 'You' : 'TenderExtractPro'}</div>
               <div>{message.text}</div>
-              {message.role === 'assistant' && (
-                <div className="chat-meta-row">
-                  <span className={`badge ${String(message.confidence || '').toLowerCase() === 'high' ? 'high' : String(message.confidence || '').toLowerCase() === 'medium' ? 'medium' : 'low'}`}>
-                    {message.confidence || 'LOW'}
-                  </span>
-                </div>
-              )}
-              {message.error && <div className="chat-error">{message.error}</div>}
+              {message.error && <div className="chat-error" style={{ color: 'var(--error)', fontSize: '14px', marginTop: '8px' }}>{message.error}</div>}
+              
               {Array.isArray(message.citations) && message.citations.length > 0 && (
-                <div className="chat-citations">
+                <div className="chat-citations" style={{ marginTop: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                   {message.citations.map((citation, citationIndex) => (
-                    <div key={`${citation.chunk_id}-${citationIndex}`} className="chat-citation-card">
-                      <div className="chat-citation-meta">
+                    <div key={`${citation.chunk_id}-${citationIndex}`} className="source-text-box" style={{ fontSize: '13px', background: 'var(--canvas-soft)', border: '1px solid var(--hairline)' }}>
+                      <div style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted-soft)', marginBottom: '8px', display: 'flex', justifyContent: 'space-between' }}>
+                        <span>Citation {citationIndex + 1}</span>
                         <span>Page {citation.page || '-'}</span>
-                        <span>{citation.chunk_id || 'NOT_FOUND'}</span>
                       </div>
-                      <div className="chat-citation-quote">{citation.quote || 'NOT_FOUND'}</div>
+                      {citation.quote || 'No quote available.'}
                     </div>
                   ))}
                 </div>
@@ -104,33 +95,34 @@ export default function ChatPanel({ job }) {
 
         {loading && (
           <div className="chat-message assistant">
-            <div className="chat-bubble">
-              <div className="chat-role">TenderExtractPro</div>
-              <div>Searching the document and drafting a grounded answer...</div>
+            <span className="chat-role">TenderExtractPro</span>
+            <div className="chat-bubble" style={{ color: 'var(--text-muted-soft)' }}>
+              Synthesizing evidence...
             </div>
           </div>
         )}
       </div>
 
-      <form
-        className="chat-input-bar"
-        onSubmit={(event) => {
-          event.preventDefault();
-          askQuestion(question);
-        }}
-      >
-        <textarea
-          className="chat-input"
-          value={question}
-          rows={3}
-          onChange={(event) => setQuestion(event.target.value)}
-          placeholder="Ask about scope, specs, timelines, exclusions, locations, compliance, pricing references..."
-        />
-        <button className="chat-send-btn" type="submit" disabled={loading || !question.trim()}>
-          <Send size={16} />
-          Ask
-        </button>
-      </form>
+      <div className="chat-input-container">
+        <form
+          className="chat-input-bar"
+          onSubmit={(event) => {
+            event.preventDefault();
+            askQuestion(question);
+          }}
+        >
+          <input
+            className="chat-input"
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            placeholder="Search the document..."
+            disabled={loading}
+          />
+          <button className="chat-send-btn" type="submit" disabled={loading || !question.trim()}>
+            <Send size={18} />
+          </button>
+        </form>
+      </div>
     </div>
   );
 }

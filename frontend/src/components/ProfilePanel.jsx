@@ -127,90 +127,75 @@ export default function ProfilePanel() {
   if (loading) return <div className="empty-state">Loading profile...</div>;
 
   return (
-    <div className="panel" style={{ padding: '32px', maxWidth: '800px', margin: '0 auto', height: '100%', overflowY: 'auto' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '24px' }}>
-        <Building size={28} color="var(--primary)" />
-        <h2 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 600, color: 'var(--text)' }}>
-          Company Profile Dashboard
+    <div className="panel" style={{ padding: '64px', maxWidth: '1000px', margin: '0 auto', height: '100%', overflowY: 'auto' }}>
+      <div style={{ marginBottom: '48px' }}>
+        <h2 style={{ fontFamily: 'var(--font-display)', fontWeight: 300, fontSize: '42px', color: 'var(--text-ink)', marginBottom: '16px' }}>
+          Company Profile
         </h2>
+        <p style={{ color: 'var(--text-muted)', fontSize: '18px', lineHeight: 1.6, maxWidth: '600px' }}>
+          Define your operational parameters. This data grounds our evaluation engine, 
+          allowing it to rank tenders against your core strengths.
+        </p>
       </div>
 
-      <p style={{ color: 'var(--text-muted)', marginBottom: '32px', lineHeight: '1.5' }}>
-        Configure your company details below. This data is used by the LLM to score and rank incoming tenders.
-      </p>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '48px', marginBottom: '64px' }}>
+        <div style={{ gridColumn: 'span 2' }}>
+           <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: '12px' }}>
+            Official Entity Name
+          </label>
+          <input 
+            type="text" 
+            value={companyName} 
+            onChange={(e) => setCompanyName(e.target.value)}
+            style={{ width: '100%', background: 'var(--surface-card)', border: '1px solid var(--hairline)', borderRadius: '12px', color: 'var(--text-ink)', padding: '16px 20px', fontSize: '16px', outline: 'none' }}
+          />
+        </div>
 
-      <div style={{ marginBottom: '20px' }}>
-        <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
-          Company Name
-        </label>
-        <input 
-          type="text" 
-          value={companyName} 
-          onChange={(e) => setCompanyName(e.target.value)}
-          style={{ width: '100%', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '10px 12px', fontSize: '1rem' }}
-        />
-      </div>
-
-      <div style={{ marginBottom: '24px' }}>
-        <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
-          Max Project Budget (USD)
-        </label>
-        <input 
-          type="number" 
-          value={budget} 
-          onChange={(e) => setBudget(e.target.value)}
-          style={{ width: '100%', background: 'var(--surface)', border: '1px solid var(--border)', borderRadius: '6px', color: 'var(--text)', padding: '10px 12px', fontSize: '1rem' }}
-        />
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '24px', marginBottom: '32px' }}>
         <div>
-          <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
+          <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: '12px' }}>
+            Maximum Project Valuation (USD)
+          </label>
+          <input 
+            type="number" 
+            value={budget} 
+            onChange={(e) => setBudget(e.target.value)}
+            style={{ width: '100%', background: 'var(--surface-card)', border: '1px solid var(--hairline)', borderRadius: '12px', color: 'var(--text-ink)', padding: '16px 20px', fontSize: '16px', outline: 'none' }}
+          />
+        </div>
+
+        <div>
+          <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: '12px' }}>
             Core Capabilities
           </label>
-          <TagInput tags={capabilities} setTags={setCapabilities} placeholder="e.g. HVAC Installation" />
+          <TagInput tags={capabilities} setTags={setCapabilities} placeholder="e.g. EPC Contracting" />
         </div>
+
         <div>
-          <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
-            Certifications
+          <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: '12px' }}>
+            Strategic Certifications
           </label>
-          <TagInput tags={certifications} setTags={setCertifications} placeholder="e.g. ISO 9001" />
+          <TagInput tags={certifications} setTags={setCertifications} placeholder="e.g. ASME VIII" />
         </div>
+
         <div>
-          <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
-            Preferred Locations
+          <label style={{ display: 'block', fontSize: '12px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.08em', fontWeight: 600, marginBottom: '12px' }}>
+            Preferred Jurisdictions
           </label>
-          <TagInput tags={locations} setTags={setLocations} placeholder="e.g. North America" />
-        </div>
-        <div>
-          <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '6px' }}>
-            Exclusions
-          </label>
-          <TagInput tags={exclusions} setTags={setExclusions} placeholder="e.g. Nuclear Facilities" />
+          <TagInput tags={locations} setTags={setLocations} placeholder="e.g. SE Asia" />
         </div>
       </div>
 
-      <div style={{ display: 'flex', alignItems: 'center', gap: '16px', paddingTop: '16px', borderTop: '1px solid var(--border)' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '24px', paddingTop: '32px', borderTop: '1px solid var(--hairline)' }}>
         <button 
           onClick={handleSave} 
           disabled={saving}
-          style={{
-            background: 'var(--primary)',
-            color: 'white',
-            border: 'none',
-            padding: '10px 24px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            display: 'flex',
-            alignItems: 'center',
-            gap: '8px',
-            fontWeight: 500
-          }}
+          className="primary-pill"
+          style={{ display: 'flex', alignItems: 'center', gap: '12px' }}
         >
           <Save size={18} />
-          {saving ? 'Saving...' : 'Save Profile'}
+          {saving ? 'Synchronizing...' : 'Save Profile'}
         </button>
-        {message && <span style={{ color: message.includes("success") ? 'var(--status-green)' : 'var(--status-red)' }}>{message}</span>}
+        {message && <span style={{ fontSize: '15px', color: message.includes("success") ? 'var(--success)' : 'var(--error)' }}>{message}</span>}
       </div>
     </div>
   );

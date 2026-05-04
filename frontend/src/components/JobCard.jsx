@@ -23,20 +23,25 @@ export default function JobCard({ job, isActive, onClick }) {
     return (
         <div className={`job-card ${isActive ? 'active' : ''}`} onClick={onClick}>
             <div className="job-title">{job.filename}</div>
+            
             <div className="job-meta">
                 <span className={`badge ${job.status}`}>{job.status}</span>
-                {progress > 0 && <span>{progress}%</span>}
+                {job.status === 'running' && <span className="job-message" style={{ margin: 0 }}>{progress}%</span>}
             </div>
+
             {(job.status === 'running' || job.status === 'queued') && (
                 <div className="progress-track">
                     <div className="progress-fill" style={{ width: `${progress}%`, transition: 'width 0.5s ease' }} />
                 </div>
             )}
-            <div className="job-message">{job.message}</div>
-            {(etaText || elapsedText) && (
-                <div className="job-meta" style={{ marginTop: '6px' }}>
-                    <span>{etaText || ''}</span>
-                    <span>{elapsedText || ''}</span>
+            
+            <div className="job-message" style={{ opacity: 0.8 }}>
+                {job.status === 'running' ? job.message : (job.status === 'done' ? 'Analysis Complete' : 'Waiting in Queue')}
+            </div>
+            
+            {job.status === 'done' && (
+                <div style={{ marginTop: '12px', fontSize: '10px', color: 'var(--text-muted-soft)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
+                    {elapsedText || 'Ready'}
                 </div>
             )}
         </div>

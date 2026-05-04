@@ -188,29 +188,29 @@ export default function ResultViewer({ job }) {
       <div className="result-header">
         <div className="result-title">
           <h2>{job.filename}</h2>
-          <span className="badge done" style={{ marginTop: '5px', display: 'inline-block' }}>
-            Extraction Complete
+          <span className="badge done" style={{ marginTop: '12px', display: 'inline-block' }}>
+            Analysis Complete
           </span>
         </div>
         <div className="result-stats">
           <div className="result-stats-item">
-            <strong>{specs.length}</strong> specs
+            <span>Specifications</span>
+            <strong>{specs.length}</strong>
           </div>
           <div className="result-stats-item">
-            <strong>{highConfidenceCount}</strong> high confidence
+            <span>Deliverables</span>
+            <strong>{scope.deliverables.length}</strong>
           </div>
           <div className="result-stats-item">
-            <strong>{scope.deliverables.length}</strong> deliverables
-          </div>
-          <div className="result-stats-item">
-            <strong>{Math.round(Number(result?.accuracy_score || 0))}%</strong> accuracy
+            <span>Accuracy</span>
+            <strong>{Math.round(Number(result?.accuracy_score || 0))}%</strong>
           </div>
         </div>
       </div>
 
       <div className="tabs">
         <div className={`tab ${activeTab === 'specs' ? 'active' : ''}`} onClick={() => setActiveTab('specs')}>
-          Technical Specifications
+          Specifications
         </div>
         <div className={`tab ${activeTab === 'scope' ? 'active' : ''}`} onClick={() => setActiveTab('scope')}>
           Scope of Work
@@ -223,10 +223,12 @@ export default function ResultViewer({ job }) {
         </div>
       </div>
 
-      {activeTab === 'specs' && <SpecsTable specs={specs} />}
-      {activeTab === 'scope' && <ScopePanel scope={scope} />}
-      {activeTab === 'qa' && <ChatPanel job={job} />}
-      {activeTab === 'match' && <ScorePanel jobId={job.job_id} />}
+      <div style={{ flex: 1, overflow: 'hidden' }}>
+        {activeTab === 'specs' && <SpecsTable specs={specs} />}
+        {activeTab === 'scope' && <ScopePanel scope={scope} />}
+        {activeTab === 'qa' && <ChatPanel job={job} />}
+        {activeTab === 'match' && <ScorePanel jobId={job.job_id} />}
+      </div>
     </div>
   );
 }

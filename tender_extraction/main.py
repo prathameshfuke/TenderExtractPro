@@ -167,8 +167,16 @@ class TenderExtractionPipeline:
             _update(45, "Building retrieval index (Parent-Child)...")
             logger.info("[4/6] Building retrieval index + querying ...")
             self._retriever = HybridRetriever(persist_dir=self._persist_dir)
-            collection_name = path.stem
+            # Use path.stem or a provided job_id for the collection name
+            collection_name = getattr(self, "_job_id", path.stem)
             self._retriever.build_index(chunks, collection_name=collection_name, force_rebuild=self._force_reindex)
+
+            # Save chunks for later Q&A reuse
+            if output_path:
+                chunks_path = Path(output_path).with_name(f"{Path(output_path).stem}_chunks.json")
+                with open(chunks_path, "w", encoding="utf-8") as f:
+                    json.dump([c.model_dump() for c in chunks], f, indent=2, ensure_ascii=False)
+                logger.info("Chunks saved to: %s", chunks_path)
 
             topic = discover_document_topic(pages)
             spec_queries = [expand_query(q) for q in build_targeted_queries(topic)]

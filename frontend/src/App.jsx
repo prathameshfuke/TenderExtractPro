@@ -76,23 +76,27 @@ export default function App() {
 
   return (
     <div className="app-container">
+      {/* Atmospheric Orbs */}
+      <div className="orb orb-1"></div>
+      <div className="orb orb-2"></div>
+      <div className="orb orb-3"></div>
+      <div className="orb orb-4"></div>
+
       {!backendOnline && (
         <div style={{
           position: 'fixed',
           top: 12,
           right: 12,
           zIndex: 999,
-          background: '#3a1111',
-          border: '1px solid #7f1d1d',
-          color: '#fecaca',
-          padding: '10px 12px',
+          background: 'var(--error)',
+          color: 'white',
+          padding: '10px 16px',
+          borderRadius: '9999px',
           fontSize: '0.85rem',
-          maxWidth: '420px'
+          fontWeight: 500,
+          boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
         }}>
-          Backend API is offline. Start it with:
-          <div style={{ marginTop: '6px', fontFamily: 'var(--font-mono)', fontSize: '0.78rem' }}>
-            .\\venv312\\Scripts\\uvicorn.exe api.main:app --host 127.0.0.1 --port 8000 --reload
-          </div>
+          API Offline
         </div>
       )}
 
@@ -110,12 +114,18 @@ export default function App() {
           <ProfilePanel />
         ) : !selectedJob ? (
           <div className="empty-state">
-            <div style={{ textAlign: 'center' }}>
-              <FileText size={48} className="upload-icon" style={{ opacity: 0.5, marginBottom: '12px' }} />
-              <h3 style={{ marginBottom: '8px' }}>Upload a tender PDF to start extraction</h3>
-              <p style={{ color: 'var(--text-muted)' }}>
-                The pipeline will process specs, scope, and grounded source evidence.
-              </p>
+            <h1>TenderExtractPro</h1>
+            <p>
+              An editorial approach to tender extraction. 
+              Upload a document to begin the deep-analysis pipeline.
+            </p>
+            <div style={{ marginTop: '32px' }}>
+              <button 
+                className="outline-pill"
+                onClick={() => document.getElementById('sidebar-upload-trigger')?.click()}
+              >
+                Get Started
+              </button>
             </div>
           </div>
         ) : (
