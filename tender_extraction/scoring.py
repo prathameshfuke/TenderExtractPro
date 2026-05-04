@@ -35,10 +35,21 @@ def score_tender_match(company_profile: Dict[str, Any], tender_result: Dict[str,
     # Compress tender_result into a readable summary to fit in context
     scope = tender_result.get("scope_of_work", {})
     summary = scope.get("summary", "")
-    deliverables = ", ".join(scope.get("deliverables", [])[:5])
-    
+
+    deliverables_list = [
+        d for d in scope.get("deliverables", [])
+        if isinstance(d, str) and d.strip()
+    ]
+    deliverables = ", ".join(deliverables_list[:5])
+
     specs = tender_result.get("technical_specifications", [])
-    components = ", ".join([s.get("component", "") for s in specs[:10]])
+    components_list = [
+        s.get("component", "").strip()
+        for s in specs
+        if isinstance(s, dict) and isinstance(s.get("component"), str) and s.get("component").strip()
+    ]
+    components = ", ".join(components_list[:10])
+    
     
     tender_summary = f"Scope Summary: {summary}\nDeliverables: {deliverables}\nKey Components: {components}"
     profile_text = json.dumps(company_profile, indent=2)
