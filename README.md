@@ -13,6 +13,30 @@ A production-grade RAG pipeline for extracting technical specifications and scop
 
 <span style="color: #e53e3e; font-weight: bold;">NEW:</span> Includes an LLM-powered <strong>Scoring and Ranking</strong> mechanism to evaluate the extracted tender against a customized Company Profile to determine match score and cost feasibility.
 
+## Interface Overview
+
+<div align="center">
+  <p><strong>Upload & Processing</strong></p>
+  <img src="assets/upload_processing.png" width="80%" alt="Upload and Processing" />
+  <br><br>
+  
+  <p><strong>Extracted Specifications</strong></p>
+  <img src="assets/extracted_specs.png" width="80%" alt="Extracted Specifications" />
+  <br><br>
+
+  <p><strong>Detailed Component View</strong></p>
+  <img src="assets/spec_drawer.png" width="80%" alt="Specification Details Drawer" />
+  <br><br>
+
+  <p><strong>Source Grounding & Evidence Match</strong></p>
+  <img src="assets/evidence_match.png" width="45%" alt="Evidence Match" />
+  <img src="assets/parameter_map.png" width="45%" alt="Parameter Map" />
+  <br><br>
+
+  <p><strong>Interactive Document Q&A</strong></p>
+  <img src="assets/document_qa.png" width="80%" alt="Document Q&A" />
+</div>
+
 ## Architecture
 
 ```mermaid
