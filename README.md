@@ -1,8 +1,17 @@
-# TenderExtractPro
+<h1 align="center">
+  <span style="color: #2b6cb0">Tender</span><span style="color: #2d3748">ExtractPro</span>
+</h1>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.12+-blue?style=for-the-badge&logo=python&logoColor=white" />
+  <img src="https://img.shields.io/badge/React-18-61dafb?style=for-the-badge&logo=react&logoColor=black" />
+  <img src="https://img.shields.io/badge/FastAPI-0.100+-009688?style=for-the-badge&logo=fastapi&logoColor=white" />
+  <img src="https://img.shields.io/badge/LLM-Mistral%207B-orange?style=for-the-badge" />
+</p>
 
 A production-grade RAG pipeline for extracting technical specifications and scope of work from tender documents. Processes real PDF, DOCX, and image files through a 6-stage pipeline: ingestion, table extraction, chunking, hybrid retrieval, LLM extraction, and grounding validation. 
 
-**NEW:** Includes an LLM-powered **Scoring and Ranking** mechanism to evaluate the extracted tender against a customized Company Profile to determine match score and cost feasibility.
+<span style="color: #e53e3e; font-weight: bold;">NEW:</span> Includes an LLM-powered <strong>Scoring and Ranking</strong> mechanism to evaluate the extracted tender against a customized Company Profile to determine match score and cost feasibility.
 
 ## Architecture
 
