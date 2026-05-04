@@ -112,7 +112,7 @@ def get_result(job_id: str):
     job = jobs.get(job_id)
     if not job or job["status"] != "done":
         return {"error": "not ready"}
-    return json.loads(Path(job["result_path"]).read_text())
+    return json.loads(Path(job["result_path"]).read_text(encoding="utf-8"))
 
 
 @app.post("/jobs/{job_id}/ask")
@@ -166,13 +166,13 @@ def delete_job(job_id: str):
 def get_profile():
     profile_path = Path("company_profile.json")
     if profile_path.exists():
-        return json.loads(profile_path.read_text())
+        return json.loads(profile_path.read_text(encoding="utf-8"))
     return {}
 
 @app.post("/profile")
 def update_profile(profile: dict):
     profile_path = Path("company_profile.json")
-    profile_path.write_text(json.dumps(profile, indent=2))
+    profile_path.write_text(json.dumps(profile, indent=2), encoding="utf-8")
     return {"status": "success"}
 
 @app.get("/jobs/{job_id}/score")
@@ -181,12 +181,12 @@ def get_job_score(job_id: str):
     if not job or job["status"] != "done":
         return {"error": "not ready"}
     
-    result = json.loads(Path(job["result_path"]).read_text())
+    result = json.loads(Path(job["result_path"]).read_text(encoding="utf-8"))
     profile_path = Path("company_profile.json")
     if not profile_path.exists():
         return {"error": "company profile not set"}
     
-    profile = json.loads(profile_path.read_text())
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
     
     import sys; sys.path.insert(0, ".")
     from tender_extraction.scoring import score_tender_match

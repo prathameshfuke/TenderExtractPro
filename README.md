@@ -78,6 +78,25 @@ You can define a **Company Profile** (via the UI or `company_profile.json`) spec
 2. **Grounding Verification**: After LLM extraction, every spec is fuzzy-matched against source chunks using `rapidfuzz`. Specs with grounding score below 0.40 are rejected.
 3. **Pydantic Validation**: Output is validated against strict Pydantic v2 models.
 
+## Advanced RAG Enhancements (Inspired by SimpleRAG)
+
+1. **Semantic Chunking**
+   - **Logic**: Replaced fixed-size splitting with `SemanticChunker` (from `langchain-experimental`). It identifies natural breakpoints based on embedding distances, ensuring that paragraphs are only split when the meaning changes.
+   - **Optimization**: Implemented lazy-loading for the chunking embedding model to prevent high latency and memory churn during document processing.
+
+2. **Parent-Child Retrieval**
+   - **Logic**: Implemented a sophisticated indexing strategy. Small "child" spans (~200 words) are indexed in Qdrant for high-precision semantic matching, while the full "parent" chunks are returned to the LLM.
+   - **Benefit**: This provides the LLM with much richer context than standard chunking while maintaining pinpoint accuracy during retrieval.
+
+3. **Enhanced Extraction & Grounding**
+   - **Prompts**: Refined system and user prompts to use professional "Tender Analyst" personas with strict verbatim extraction rules.
+   - **JSON Repair**: Upgraded the JSON repair logic to handle common LLM failure modes like unescaped newlines and markdown fences more robustly.
+
+4. **Environment & Stability Fixes**
+   - **Virtual Environment**: Ensured all dependencies are correctly isolated in the project's local `venv`.
+   - **LLM Fix**: Resolved the `PrefetchVirtualMemory` error on Windows by disabling `mmap` during model loading.
+   - **Dependencies**: Updated `requirements.txt` to include `langchain` and related libraries.
+
 ## Project Structure
 
 ```
