@@ -22,20 +22,12 @@ from tender_extraction.schemas import Chunk, ChunkMetadata
 logger = logging.getLogger(__name__)
 
 # Regex for numbered section headers commonly found in Indian government tenders.
-# Matches patterns like "3.2 Material Requirements", "3.2.1 Steel", "10. Scope"
-# Also handles trailing dots: "3.2. Material Requirements"
-# Tested against headers from MTF, PBMC, NHAI, and CPWD tenders.
 _SECTION_RE = re.compile(r"^(\d+(?:\.\d+)*\.?)\s+(.+)$")
 
 
 def _count_tokens(text: str) -> int:
     """
     Count tokens using tiktoken for accurate LLM budget estimation.
-
-    Falls back to word-count heuristic if tiktoken isn't available or
-    fails (which happened once with some Unicode garbage from a corrupt
-    scan). The heuristic of len/4 is surprisingly close to tiktoken
-    for English text — within 10% on average.
     """
     try:
         import tiktoken
@@ -48,20 +40,10 @@ def _count_tokens(text: str) -> int:
 def create_chunks(
     pages: List[Dict[str, Any]],
     tables: Optional[List[Dict[str, Any]]] = None,
+    use_semantic: bool = True,
 ) -> List[Chunk]:
     """
     Create hierarchical chunks from page text and extracted tables.
-
-    Table chunks are created first because they're higher priority —
-    they contain the structured spec data. Text chunks fill in the
-    narrative context (scope of work, general conditions, etc.)
-
-    Args:
-        pages:  Output of ingestion.ingest_document().
-        tables: Output of table_extraction.extract_tables().
-
-    Returns:
-        List of Chunk objects with rich metadata.
     """
     chunks: List[Chunk] = []
 
@@ -76,9 +58,13 @@ def create_chunks(
         text = page_data["text"]
         is_ocr = page_data.get("is_ocr", False)
         chunk_type = "image_ocr" if is_ocr else "paragraph"
-        heading_hints = page_data.get("headings", [])   # from PyMuPDF
+        heading_hints = page_data.get("headings", [])
 
-        page_chunks = _chunk_text(text, page_num, chunk_type, heading_hints=heading_hints)
+        page_chunks = _chunk_text(
+            text, page_num, chunk_type, 
+            heading_hints=heading_hints,
+            use_semantic=use_semantic
+        )
         chunks.extend(page_chunks)
 
     logger.info(
@@ -94,15 +80,6 @@ def _chunk_tables(tables: List[Dict[str, Any]]) -> List[Chunk]:
     """
     Each table row becomes a separate chunk with the full header row
     prepended for context.
-
-    Why not one chunk per table? Because tables in tenders can be 50+
-    rows, which blows past the token limit. And if we stuff the whole
-    table into one chunk, the LLM tends to only extract specs from the
-    first and last few rows (attention locality bias).
-
-    Why repeat headers in every row chunk? Because without headers, a row
-    like "500 | kg | ±5% | IS 456" is meaningless. The LLM needs to know
-    that column 1 is Quantity, column 2 is Unit, etc.
     """
     chunks: List[Chunk] = []
 
@@ -120,7 +97,6 @@ def _chunk_tables(tables: List[Dict[str, Any]]) -> List[Chunk]:
                 continue
 
             row_line = " | ".join(row)
-            # Format that gives the LLM clear table context
             text = f"[Table Headers]: {header_line}\n[Row {row_idx + 1}]: {row_line}"
 
             chunk_id = f"{table_id}_row_{row_idx + 1}_{_short_uuid()}"
@@ -143,14 +119,10 @@ def _chunk_text(
     page: int,
     chunk_type: str,
     heading_hints: Optional[List[str]] = None,
+    use_semantic: bool = True,
 ) -> List[Chunk]:
     """
     Split page text into paragraph-level chunks with section awareness.
-
-    The section detection regex picks up numbered headers which cover
-    95%+ of Indian government tender docs. For the rare tender without
-    numbered sections, chunks still get created — they just have
-    section="Unknown" which is handled gracefully downstream.
     """
     chunks: List[Chunk] = []
     lines = text.split("\n")
@@ -168,17 +140,15 @@ def _chunk_text(
             paragraph_buffer.clear()
             return
 
-        # Detect lists: lines starting with bullets or dashes.
-        # Tenders love bulleted lists for deliverables and exclusions.
         detected_type = chunk_type
         list_lines = [l for l in paragraph_buffer if re.match(r"^\s*[-•*]\s", l)]
         if len(list_lines) > len(paragraph_buffer) * 0.5 and len(paragraph_buffer) >= 2:
             detected_type = "list"
 
-        # Split if the paragraph exceeds our token limit.
-        # This happens with long narrative sections like "General Conditions"
-        # which can be 2000+ tokens of continuous text.
-        sub_texts = _split_by_tokens(para_text)
+        if use_semantic and detected_type in ("paragraph", "list", "image_ocr"):
+            sub_texts = _semantic_split_text(para_text)
+        else:
+            sub_texts = _split_by_tokens(para_text)
 
         for sub_text in sub_texts:
             chunk_id = f"chunk_{page}_{_short_uuid()}"
@@ -192,28 +162,22 @@ def _chunk_text(
 
         paragraph_buffer.clear()
 
-    # Build a set of heading strings from PyMuPDF for fast lookup
     heading_set = set(heading_hints or [])
 
     for line in lines:
         stripped = line.strip()
         if not stripped:
-            # Blank line = paragraph boundary
             _flush_paragraph()
             continue
 
-        # Check for section header via numbered-section regex
         header_match = _SECTION_RE.match(stripped)
-        # Also recognise PyMuPDF-detected headings that don't have a number prefix
         is_pymupdf_heading = (not header_match) and (stripped in heading_set)
 
         if header_match:
             _flush_paragraph()
-
             section_number = header_match.group(1).rstrip(".")
             section_title = header_match.group(2).strip()
             full_section = f"{section_number} {section_title}"
-
             parent_section, current_section = _resolve_hierarchy(
                 section_number, full_section, current_section, parent_section
             )
@@ -221,8 +185,6 @@ def _chunk_text(
             continue
 
         if is_pymupdf_heading:
-            # Unnumbered heading (e.g. "TECHNICAL SPECIFICATIONS" in large font) —
-            # flush and start a new section using the heading text itself.
             _flush_paragraph()
             current_section = stripped
             parent_section = stripped
@@ -231,10 +193,54 @@ def _chunk_text(
 
         paragraph_buffer.append(stripped)
 
-    # Don't forget the last paragraph (no trailing blank line)
     _flush_paragraph()
-
     return chunks
+
+
+# Singleton model cache for semantic chunking
+_semantic_embed_model = None
+
+def _get_semantic_embed_model():
+    global _semantic_embed_model
+    if _semantic_embed_model is None:
+        from langchain_community.embeddings import HuggingFaceBgeEmbeddings
+        logger.info("Loading embedding model for semantic chunking: %s", config.retrieval.embedding_model)
+        _semantic_embed_model = HuggingFaceBgeEmbeddings(
+            model_name=config.retrieval.embedding_model,
+            model_kwargs={'device': 'cpu'},
+            encode_kwargs={'normalize_embeddings': True}
+        )
+    return _semantic_embed_model
+
+
+def _semantic_split_text(text: str) -> List[str]:
+    """
+    Use LangChain's SemanticChunker to split text based on embedding distances.
+    """
+    try:
+        from langchain_experimental.text_splitter import SemanticChunker
+        
+        embed_model = _get_semantic_embed_model()
+        
+        splitter = SemanticChunker(
+            embed_model, 
+            breakpoint_threshold_type="gradient",
+        )
+        
+        docs = splitter.create_documents([text])
+        sub_texts = [doc.page_content for doc in docs]
+        
+        final_texts = []
+        for t in sub_texts:
+            if _count_tokens(t) > config.chunking.max_chunk_tokens * 1.5:
+                final_texts.extend(_split_by_tokens(t))
+            else:
+                final_texts.append(t)
+        return final_texts
+        
+    except Exception as exc:
+        logger.warning("Semantic chunking failed (%s). Falling back to token-based splitting.", exc)
+        return _split_by_tokens(text)
 
 
 def _resolve_hierarchy(
@@ -243,17 +249,6 @@ def _resolve_hierarchy(
     current_section: str,
     parent_section: str,
 ) -> Tuple[str, str]:
-    """
-    Figure out parent/child section relationships from section numbers.
-
-    "3" → top-level, parent is itself
-    "3.2" → parent is whatever the current section was (likely "3 ...")
-    "3.2.1" → parent is the current section (likely "3.2 ...")
-
-    Not perfect for all edge cases (e.g. jumping from 3.2.1 to 4.1) but
-    good enough for the tender docs we've tested. The section metadata is
-    nice-to-have context for the LLM, not a critical data path.
-    """
     parts = section_number.split(".")
     if len(parts) == 1:
         return full_section, full_section
@@ -262,14 +257,6 @@ def _resolve_hierarchy(
 
 
 def _split_by_tokens(text: str) -> List[str]:
-    """
-    Split text into sub-chunks up to max_chunk_tokens, with overlap.
-
-    Overlap is implemented by repeating the last `overlap_tokens` worth
-    of sentences at the start of the next chunk so context is not lost
-    at chunk boundaries (e.g. a spec value sentence that follows a
-    header sentence in the previous chunk).
-    """
     max_tokens = config.chunking.max_chunk_tokens
     overlap_tokens = config.chunking.overlap_tokens
     token_count = _count_tokens(text)
@@ -286,8 +273,6 @@ def _split_by_tokens(text: str) -> List[str]:
         sent_tokens = _count_tokens(sentence)
         if current_count + sent_tokens > max_tokens and current:
             sub_chunks.append(" ".join(current))
-            # Build overlap: walk back from the end of `current` collecting
-            # sentences until we have at least overlap_tokens worth.
             overlap_sents: List[str] = []
             overlap_count = 0
             for s in reversed(current):
@@ -309,10 +294,7 @@ def _split_by_tokens(text: str) -> List[str]:
 
 
 def _short_uuid() -> str:
-    """8-char hex ID. Short enough for readability in logs, long enough
-    to avoid collisions for typical document sizes (<10k chunks)."""
     return uuid.uuid4().hex[:8]
-
 
 
 if __name__ == "__main__":
@@ -335,29 +317,4 @@ if __name__ == "__main__":
 
     print(f"Chunking {len(pages)} pages + {len(tables)} tables ...")
     chunks = create_chunks(pages, tables)
-
-    # Report by type
-    type_counts = {}
-    for c in chunks:
-        ct = c.metadata.chunk_type
-        type_counts[ct] = type_counts.get(ct, 0) + 1
-    print(f"Total chunks: {len(chunks)} (types: {type_counts})")
-
-    # Report by section (top 10)
-    section_counts = {}
-    for c in chunks:
-        s = c.metadata.section
-        section_counts[s] = section_counts.get(s, 0) + 1
-    top_sections = sorted(section_counts.items(), key=lambda x: -x[1])[:10]
-    print(f"\nTop 10 sections:")
-    for sec, cnt in top_sections:
-        print(f"  {sec[:50]}: {cnt} chunks")
-
-    # Show a few real chunks
-    print(f"\nSample chunks (first 3):")
-    for c in chunks[:3]:
-        print(f"  [{c.chunk_id}] page={c.metadata.page} type={c.metadata.chunk_type}")
-        print(f"    section: {c.metadata.section}")
-        print(f"    text: {c.text[:100]}...")
-
-    print("\nChunking smoke test passed.")
+    print(f"Total chunks: {len(chunks)}")

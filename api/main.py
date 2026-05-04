@@ -161,3 +161,35 @@ def delete_job(job_id: str):
     if job_id in jobs:
         del jobs[job_id]
     return {"deleted": job_id}
+
+@app.get("/profile")
+def get_profile():
+    profile_path = Path("company_profile.json")
+    if profile_path.exists():
+        return json.loads(profile_path.read_text())
+    return {}
+
+@app.post("/profile")
+def update_profile(profile: dict):
+    profile_path = Path("company_profile.json")
+    profile_path.write_text(json.dumps(profile, indent=2))
+    return {"status": "success"}
+
+@app.get("/jobs/{job_id}/score")
+def get_job_score(job_id: str):
+    job = jobs.get(job_id)
+    if not job or job["status"] != "done":
+        return {"error": "not ready"}
+    
+    result = json.loads(Path(job["result_path"]).read_text())
+    profile_path = Path("company_profile.json")
+    if not profile_path.exists():
+        return {"error": "company profile not set"}
+    
+    profile = json.loads(profile_path.read_text())
+    
+    import sys; sys.path.insert(0, ".")
+    from tender_extraction.scoring import score_tender_match
+    
+    score_result = score_tender_match(profile, result)
+    return score_result

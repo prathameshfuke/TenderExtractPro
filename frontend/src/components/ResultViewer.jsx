@@ -4,6 +4,7 @@ import { XCircle } from 'lucide-react';
 import SpecsTable from './SpecsTable';
 import ScopePanel from './ScopePanel';
 import ChatPanel from './ChatPanel';
+import ScorePanel from './ScorePanel';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -217,11 +218,15 @@ export default function ResultViewer({ job }) {
         <div className={`tab ${activeTab === 'qa' ? 'active' : ''}`} onClick={() => setActiveTab('qa')}>
           Ask Document
         </div>
+        <div className={`tab ${activeTab === 'match' ? 'active' : ''}`} onClick={() => setActiveTab('match')}>
+          Match Score
+        </div>
       </div>
 
       {activeTab === 'specs' && <SpecsTable specs={specs} />}
       {activeTab === 'scope' && <ScopePanel scope={scope} />}
       {activeTab === 'qa' && <ChatPanel job={job} />}
+      {activeTab === 'match' && <ScorePanel jobId={job.job_id} />}
     </div>
   );
 }

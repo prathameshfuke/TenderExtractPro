@@ -29,7 +29,8 @@ class DocumentChatSession:
 
         pages = ingest_document(self.file_path)
         tables = extract_tables(self.file_path) if Path(self.file_path).suffix.lower() == ".pdf" else []
-        chunks = create_chunks(pages, tables)
+        # Use semantic chunking for better QA context
+        chunks = create_chunks(pages, tables, use_semantic=True)
         topic = discover_document_topic(pages)
 
         retriever = HybridRetriever(persist_dir=self.persist_dir)

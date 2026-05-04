@@ -152,9 +152,10 @@ class TenderExtractionPipeline:
 
             # -- Stage 3: Chunking ---------------------------------------------
             t0 = time.time()
-            _update(35, "Chunking document text...")
+            _update(35, "Chunking document text (Semantic)...")
             logger.info("[3/6] Creating chunks ...")
-            chunks = create_chunks(pages, tables)
+            # Enabling semantic chunking by default as it yields much better boundaries
+            chunks = create_chunks(pages, tables, use_semantic=True)
             logger.info("  Created: %d chunks in %.1fs", len(chunks), time.time() - t0)
 
             if not chunks:
@@ -163,24 +164,25 @@ class TenderExtractionPipeline:
 
             # -- Stage 4: Retrieval --------------------------------------------
             t0 = time.time()
-            _update(45, "Building hybrid retrieval index...")
+            _update(45, "Building retrieval index (Parent-Child)...")
             logger.info("[4/6] Building retrieval index + querying ...")
             self._retriever = HybridRetriever(persist_dir=self._persist_dir)
-            collection_name = path.stem  # use filename without extension as collection ID
+            collection_name = path.stem
             self._retriever.build_index(chunks, collection_name=collection_name, force_rebuild=self._force_reindex)
 
             topic = discover_document_topic(pages)
             spec_queries = [expand_query(q) for q in build_targeted_queries(topic)]
             scope_queries = [
-                expand_query("scope of work tasks deliverables responsibilities obligations"),
-                expand_query("project timeline schedule completion delivery timeline milestones"),
-                expand_query("exclusions not included out of scope boundary limits vendor excluded"),
-                expand_query("contractor requirements obligations supply detailed tasks breakdown"),
+                expand_query("detailed scope of work tasks deliverables"),
+                expand_query("project completion schedule milestones timeline"),
+                expand_query("items excluded from scope boundary limits"),
+                expand_query("technical requirements and contractor obligations"),
             ]
 
-            # Keep retrieved context focused to improve precision and reduce LLM latency.
-            spec_chunks = self._multi_query_retrieve(spec_queries, top_k=20, is_spec=True)
-            scope_chunks = self._multi_query_retrieve(scope_queries, top_k=12, mode="scope")
+            # Since we now use Parent-Child, top_k 15-20 gives us rich context
+            spec_chunks = self._multi_query_retrieve(spec_queries, top_k=15, mode="spec")
+            scope_chunks = self._multi_query_retrieve(scope_queries, top_k=10, mode="scope")
+
             logger.info(
                 "  Retrieved: %d spec chunks, %d scope chunks in %.1fs",
                 len(spec_chunks), len(scope_chunks), time.time() - t0,

@@ -3,6 +3,7 @@ import axios from 'axios';
 import { FileText } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import ResultViewer from './components/ResultViewer';
+import ProfilePanel from './components/ProfilePanel';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -18,6 +19,7 @@ export default function App() {
   const [jobs, setJobs] = useState([]);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [backendOnline, setBackendOnline] = useState(true);
+  const [showProfile, setShowProfile] = useState(false);
 
   const selectedJob = useMemo(
     () => jobs.find((job) => job.job_id === selectedJobId) || null,
@@ -69,6 +71,7 @@ export default function App() {
   const handleUploadComplete = (newJob) => {
     setJobs((prev) => sortJobsByRecency([newJob, ...prev]));
     setSelectedJobId(newJob.job_id);
+    setShowProfile(false);
   };
 
   return (
@@ -96,12 +99,16 @@ export default function App() {
       <Sidebar
         jobs={jobs}
         selectedJob={selectedJob}
-        onSelectJob={(job) => setSelectedJobId(job.job_id)}
+        showProfile={showProfile}
+        onSelectJob={(job) => { setSelectedJobId(job.job_id); setShowProfile(false); }}
+        onShowProfile={() => setShowProfile(true)}
         onUploadComplete={handleUploadComplete}
       />
 
       <main className="main-content">
-        {!selectedJob ? (
+        {showProfile ? (
+          <ProfilePanel />
+        ) : !selectedJob ? (
           <div className="empty-state">
             <div style={{ textAlign: 'center' }}>
               <FileText size={48} className="upload-icon" style={{ opacity: 0.5, marginBottom: '12px' }} />

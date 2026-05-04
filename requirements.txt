@@ -15,6 +15,9 @@ qdrant-client>=1.9.0
 # Retrieval — Hybrid BM25 + Qdrant dense vectors + cross-encoder reranking
 sentence-transformers>=3.0.0
 rank-bm25>=0.2.0
+langchain>=1.2.17
+langchain-experimental>=0.4.1
+langchain-community>=0.4.1
 
 # LLM
 llama-cpp-python==0.3.4
