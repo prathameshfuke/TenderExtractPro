@@ -164,10 +164,9 @@ def validate_extractions(
         accepted_count += 1
         validated_deliverables.append(item)
 
-    # Exclusions, locations, references are pass-through (no grounding check needed)
-    validated_exclusions = [e for e in scope.get("exclusions", []) if isinstance(e, str) and e.strip()]
-    validated_locations = [l for l in scope.get("locations", []) if isinstance(l, str) and l.strip()]
-    validated_references = [r for r in scope.get("references", []) if isinstance(r, str) and r.strip()]
+    validated_exclusions = _filter_grounded_strings(scope.get("exclusions", []), source_chunks, "exclusion")
+    validated_locations = _filter_grounded_strings(scope.get("locations", []), source_chunks, "location")
+    validated_references = _filter_grounded_strings(scope.get("references", []), source_chunks, "reference")
 
     # Stats
     specs_rejected = len(raw_specs) - len(validated_specs)
@@ -303,6 +302,23 @@ def _verify_deliverable_grounding(
         if ratio > best:
             best = ratio
     return best
+
+
+def _filter_grounded_strings(
+    values: List[Any],
+    source_chunks: List[Dict[str, Any]],
+    label: str,
+) -> List[str]:
+    validated: List[str] = []
+    for value in values:
+        if not isinstance(value, str) or not value.strip():
+            continue
+        score = _verify_deliverable_grounding(value, source_chunks)
+        if score < config.validation.min_grounding_ratio - 1e-9:
+            logger.warning("REJECTED %s '%s' (grounding=%.2f)", label, value[:60], score)
+            continue
+        validated.append(value)
+    return validated
 
 
 def _enforce_not_found(data: Dict[str, Any]) -> Dict[str, Any]:

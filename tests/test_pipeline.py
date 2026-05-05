@@ -17,23 +17,32 @@ from __future__ import annotations
 import json
 import logging
 import os
+import shutil
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from api.main import _resolve_upload_path
 from tender_extraction.schemas import (
     Chunk, ChunkMetadata, ExtractionResult,
     TechnicalSpecification, SourceCitation,
     ScopeOfWork,
 )
 from tender_extraction.chunking import create_chunks
-from tender_extraction.table_extraction import _map_columns, _clean_table, extract_tables
+from tender_extraction.table_extraction import (
+    _clean_table,
+    _map_columns,
+    extract_docx_tables,
+    extract_tables,
+)
 from tender_extraction.validation import (
     verify_grounding, assign_confidence,
     validate_extractions, _enforce_not_found,
 )
 from tender_extraction.ingestion import ingest_document
+from tender_extraction.vision import normalize_multimodal_tables, should_try_multimodal_table_fallback
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s | %(message)s")
 
@@ -141,6 +150,73 @@ def test_clean_table():
     print("  PASS: test_clean_table")
 
 
+def test_docx_table_extraction():
+    from docx import Document
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        docx_path = Path(tmpdir) / "sample.docx"
+        document = Document()
+        document.add_paragraph("Tender overview paragraph.")
+        table = document.add_table(rows=3, cols=3)
+        table.rows[0].cells[0].text = "Item"
+        table.rows[0].cells[1].text = "Specification"
+        table.rows[0].cells[2].text = "Unit"
+        table.rows[1].cells[0].text = "Pump"
+        table.rows[1].cells[1].text = "10 HP"
+        table.rows[1].cells[2].text = "Nos"
+        table.rows[2].cells[0].text = "Cable"
+        table.rows[2].cells[1].text = "XLPE"
+        table.rows[2].cells[2].text = "m"
+        document.save(docx_path)
+
+        tables = extract_docx_tables(str(docx_path))
+        pages = ingest_document(str(docx_path))
+        assert len(tables) == 1
+        assert tables[0]["headers"] == ["Item", "Specification", "Unit"]
+        assert tables[0]["rows"][0][0] == "Pump"
+        assert "Pump" not in pages[0]["text"]
+        print("  PASS: test_docx_table_extraction")
+
+
+def test_multimodal_table_normalization():
+    payload = {
+        "tables": [
+            {
+                "headers": ["Parameter", "Value"],
+                "rows": [["Voltage", "415 V"], ["Frequency", "50 Hz"]],
+            }
+        ]
+    }
+    tables = normalize_multimodal_tables(payload, page_number=3)
+    assert len(tables) == 1
+    assert tables[0]["page"] == 3
+    assert tables[0]["rows"][1][1] == "50 Hz"
+    print("  PASS: test_multimodal_table_normalization")
+
+
+def test_multimodal_table_routing():
+    from tender_extraction.config import config
+
+    old_enabled = config.multimodal.enabled
+    try:
+        config.multimodal.enabled = True
+        should_route = should_try_multimodal_table_fallback(
+            page_number=2,
+            conventional_tables_count=0,
+            page_hint={"page": 2, "text": "A | B | C\n10 | 20 | 30\n40 | 50 | 60", "is_ocr": True},
+        )
+        assert should_route is True
+        print("  PASS: test_multimodal_table_routing")
+    finally:
+        config.multimodal.enabled = old_enabled
+
+
+def test_upload_path_preserves_suffix():
+    upload_path = _resolve_upload_path("abcd1234", "tender.docx")
+    assert upload_path.name == "abcd1234.docx"
+    print("  PASS: test_upload_path_preserves_suffix")
+
+
 # -- Grounding tests --
 
 def test_grounding_exact_match():
@@ -220,6 +296,32 @@ def test_validation_rejects_hallucinated():
     print(f"  PASS: test_validation_rejects_hallucinated (1 accepted, 1 rejected)")
 
 
+def test_validation_filters_ungrounded_scope_fields():
+    source_chunks = [{
+        "chunk": Chunk(
+            chunk_id="c1",
+            text="Civil works are excluded from the contractor scope at Building A under Clause 7.",
+            metadata=ChunkMetadata(page=4),
+        ),
+        "score": 0.9,
+    }]
+    extraction = {
+        "technical_specifications": [],
+        "scope_of_work": {
+            "summary": "NOT_FOUND",
+            "deliverables": [],
+            "exclusions": ["Civil works are excluded from the contractor scope"],
+            "locations": ["Building A"],
+            "references": ["Clause 7"],
+        },
+    }
+    validated = validate_extractions(extraction, source_chunks)
+    assert validated["scope_of_work"]["exclusions"] == ["Civil works are excluded from the contractor scope"]
+    assert validated["scope_of_work"]["locations"] == ["Building A"]
+    assert validated["scope_of_work"]["references"] == ["Clause 7"]
+    print("  PASS: test_validation_filters_ungrounded_scope_fields")
+
+
 # -- Real dataset tests --
 
 def test_real_pdf_ingestion():
@@ -269,9 +371,8 @@ def test_query_expansion():
 
 def test_chromadb_retrieval():
     """Test Qdrant-based retrieval with synthetic chunks."""
+    from tender_extraction.config import config
     from tender_extraction.retrieval import HybridRetriever
-    from tender_extraction.schemas import Chunk, ChunkMetadata
-    import shutil
 
     chunks = [
         Chunk(
@@ -292,7 +393,9 @@ def test_chromadb_retrieval():
     ]
 
     persist_dir = "./_test_qdrant_db"
+    original_rerank_top_k = config.retrieval.rerank_top_k
     try:
+        config.retrieval.rerank_top_k = 0
         retriever = HybridRetriever(persist_dir=persist_dir)
         retriever.build_index(chunks, collection_name="test_collection", force_rebuild=True)
         results = retriever.retrieve("steel reinforcement grade", top_k=3)
@@ -302,7 +405,90 @@ def test_chromadb_retrieval():
         assert "steel" in top_chunk_text or "reinforcement" in top_chunk_text
         print(f"  PASS: test_chromadb_retrieval ({len(results)} results, top='{results[0]['chunk'].text[:40]}...')")
     finally:
+        config.retrieval.rerank_top_k = original_rerank_top_k
         shutil.rmtree("./_test_qdrant_db", ignore_errors=True)
+
+
+def test_retrieval_reranking():
+    import tender_extraction.retrieval as retrieval_module
+    from tender_extraction.config import config
+    from tender_extraction.retrieval import HybridRetriever
+
+    class FakeCrossEncoder:
+        def predict(self, pairs):
+            scores = []
+            for _, text in pairs:
+                scores.append(0.95 if "administrative" in text.lower() else 0.10)
+            return scores
+
+    original_get_cross_encoder = retrieval_module._get_cross_encoder
+    original_rerank_top_k = config.retrieval.rerank_top_k
+    config.retrieval.rerank_top_k = 2
+    retrieval_module._get_cross_encoder = lambda: FakeCrossEncoder()
+
+    chunks = [
+        Chunk(
+            chunk_id="chunk_test_1",
+            text="Steel reinforcement bars shall be Grade 60 conforming to ASTM A615.",
+            metadata=ChunkMetadata(page=15, section="Materials", chunk_type="paragraph"),
+        ),
+        Chunk(
+            chunk_id="chunk_test_2",
+            text="Administrative overview and submission conditions for the tender.",
+            metadata=ChunkMetadata(page=1, section="Administration", chunk_type="paragraph"),
+        ),
+    ]
+
+    persist_dir = "./_test_qdrant_rerank"
+    try:
+        retriever = HybridRetriever(persist_dir=persist_dir)
+        retriever.build_index(chunks, collection_name="rerank_collection", force_rebuild=True)
+        results = retriever.retrieve("steel reinforcement", top_k=2)
+        assert results[0]["chunk"].chunk_id == "chunk_test_2"
+        print("  PASS: test_retrieval_reranking")
+    finally:
+        retrieval_module._get_cross_encoder = original_get_cross_encoder
+        config.retrieval.rerank_top_k = original_rerank_top_k
+        shutil.rmtree(persist_dir, ignore_errors=True)
+
+
+def test_collection_rebuilds_when_chunks_change():
+    from tender_extraction.retrieval import HybridRetriever
+
+    persist_dir = "./_test_qdrant_manifest"
+    collection_name = "manifest_collection"
+    original_chunks = [
+        Chunk(
+            chunk_id="chunk_a",
+            text="Steel reinforcement bars shall be Grade 60 conforming to ASTM A615.",
+            metadata=ChunkMetadata(page=10, section="Materials", chunk_type="paragraph"),
+        ),
+        Chunk(
+            chunk_id="chunk_b",
+            text="Cement shall be OPC Grade 53 conforming to IS 12269.",
+            metadata=ChunkMetadata(page=11, section="Materials", chunk_type="paragraph"),
+        ),
+    ]
+    updated_chunks = [
+        Chunk(
+            chunk_id="chunk_c",
+            text="Only one updated chunk should remain in the reused collection.",
+            metadata=ChunkMetadata(page=12, section="Updates", chunk_type="paragraph"),
+        )
+    ]
+
+    try:
+        retriever = HybridRetriever(persist_dir=persist_dir)
+        retriever.build_index(original_chunks, collection_name=collection_name, force_rebuild=True)
+        retriever.close()
+
+        retriever = HybridRetriever(persist_dir=persist_dir)
+        retriever.build_index(updated_chunks, collection_name=collection_name, force_rebuild=False)
+        point_count = retriever._qdrant.count(collection_name=collection_name, exact=True).count
+        assert point_count == 1
+        print("  PASS: test_collection_rebuilds_when_chunks_change")
+    finally:
+        shutil.rmtree(persist_dir, ignore_errors=True)
 
 
 # -- Runner --
@@ -321,13 +507,20 @@ def run_all_tests():
         test_column_mapping_standard,
         test_column_mapping_alternate,
         test_clean_table,
+        test_docx_table_extraction,
+        test_multimodal_table_normalization,
+        test_multimodal_table_routing,
+        test_upload_path_preserves_suffix,
         test_grounding_exact_match,
         test_grounding_rejects_hallucination,
         test_confidence_mapping,
         test_enforce_not_found,
         test_validation_rejects_hallucinated,
+        test_validation_filters_ungrounded_scope_fields,
         test_query_expansion,
         test_chromadb_retrieval,
+        test_retrieval_reranking,
+        test_collection_rebuilds_when_chunks_change,
         test_real_pdf_ingestion,
         test_real_pdf_table_extraction,
         test_real_pdf_chunking,

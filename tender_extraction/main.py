@@ -29,11 +29,17 @@ from typing import Any, Dict, List, Optional
 
 from tender_extraction.config import config
 from tender_extraction.ingestion import ingest_document
-from tender_extraction.table_extraction import extract_tables, parse_table_to_specs
+from tender_extraction.table_extraction import (
+    extract_docx_tables,
+    extract_image_tables,
+    extract_tables,
+    parse_table_to_specs,
+)
 from tender_extraction.chunking import create_chunks
 from tender_extraction.retrieval import HybridRetriever, expand_query
 from tender_extraction.extraction import extract_specifications, extract_scope_of_work
 from tender_extraction.validation import validate_extractions, validate_schema
+from tender_extraction.vision import release_multimodal_model
 
 logger = logging.getLogger("tender_extraction")
 
@@ -141,14 +147,26 @@ class TenderExtractionPipeline:
             logger.info("[2/6] Extracting tables ...")
             tables = []
             table_specs = []
-            if path.suffix.lower() == ".pdf":
-                tables = extract_tables(file_path)
+            suffix = path.suffix.lower()
+            if suffix == ".pdf":
+                tables = extract_tables(file_path, pages=pages)
+            elif suffix == ".docx":
+                tables = extract_docx_tables(file_path)
+            elif suffix in {".jpg", ".jpeg", ".png"}:
+                tables = extract_image_tables(file_path)
+
+            if tables:
                 for table in tables:
                     table_specs.extend(parse_table_to_specs(table))
-                logger.info("  Found: %d tables, %d table-specs in %.1fs",
-                            len(tables), len(table_specs), time.time() - t0)
+                logger.info(
+                    "  Found: %d tables, %d table-specs in %.1fs",
+                    len(tables), len(table_specs), time.time() - t0,
+                )
             else:
-                logger.info("  Skipped (non-PDF)")
+                logger.info("  Found: 0 tables in %.1fs", time.time() - t0)
+
+            # Free the optional vision model before chunking/retrieval on 8 GB-class GPUs.
+            release_multimodal_model()
 
             # -- Stage 3: Chunking ---------------------------------------------
             t0 = time.time()
@@ -188,8 +206,8 @@ class TenderExtractionPipeline:
             ]
 
             # Since we now use Parent-Child, top_k 15-20 gives us rich context
-            spec_chunks = self._multi_query_retrieve(spec_queries, top_k=15, mode="spec")
-            scope_chunks = self._multi_query_retrieve(scope_queries, top_k=10, mode="scope")
+            spec_chunks = self._multi_query_retrieve(spec_queries, top_k=24, mode="spec")
+            scope_chunks = self._multi_query_retrieve(scope_queries, top_k=16, mode="scope")
 
             logger.info(
                 "  Retrieved: %d spec chunks, %d scope chunks in %.1fs",

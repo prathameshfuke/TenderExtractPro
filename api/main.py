@@ -15,34 +15,45 @@ jobs = {}  # job_id -> {status, progress, message, filename, result_path}
 chat_sessions = {}
 UPLOAD_DIR = Path("uploads"); UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR = Path("outputs"); OUTPUT_DIR.mkdir(exist_ok=True)
+SUPPORTED_UPLOAD_SUFFIXES = {".pdf", ".docx", ".jpg", ".jpeg", ".png"}
 
 
 class AskRequest(BaseModel):
     question: str
 
+
+def _resolve_upload_path(job_id: str, filename: str | None) -> Path:
+    suffix = Path(filename or "").suffix.lower()
+    if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
+        raise ValueError(f"Unsupported upload type: {suffix or 'unknown'}")
+    return UPLOAD_DIR / f"{job_id}{suffix}"
+
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
     now = time.time()
     job_id = str(uuid.uuid4())[:8]
-    pdf_path = UPLOAD_DIR / f"{job_id}.pdf"
+    try:
+        file_path = _resolve_upload_path(job_id, file.filename)
+    except ValueError as exc:
+        return {"error": str(exc)}
     content = await file.read()
-    pdf_path.write_bytes(content)
+    file_path.write_bytes(content)
     jobs[job_id] = {
         "status": "queued", "progress": 0,
         "message": "Queued", "filename": file.filename,
         "job_id": job_id, "result_path": None,
         "created_at": now, "started_at": None, "updated_at": now,
-        "pdf_path": str(pdf_path),
+        "file_path": str(file_path),
     }
     thread = threading.Thread(
         target=run_pipeline_sync, 
-        args=(job_id, str(pdf_path)), 
+        args=(job_id, str(file_path)),
         daemon=True
     )
     thread.start()
     return {"job_id": job_id, "filename": file.filename}
 
-def run_pipeline_sync(job_id: str, pdf_path: str):
+def run_pipeline_sync(job_id: str, file_path: str):
     heartbeat_stop = threading.Event()
 
     try:
@@ -82,7 +93,7 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
         
         output_path = str(OUTPUT_DIR / f"{job_id}.json")
         pipeline = TenderExtractionPipeline()
-        result = pipeline.run(pdf_path, output_path=output_path,
+        result = pipeline.run(file_path, output_path=output_path,
                               progress_callback=progress_callback)
         
         specs = len(result.get("technical_specifications", []))
@@ -125,8 +136,8 @@ def ask_document(job_id: str, payload: AskRequest):
     if not question:
         return {"error": "question is required"}
 
-    pdf_path = job.get("pdf_path")
-    if not pdf_path or not Path(pdf_path).exists():
+    file_path = job.get("file_path")
+    if not file_path or not Path(file_path).exists():
         return {"error": "source document is unavailable"}
 
     session = chat_sessions.get(job_id)
@@ -135,7 +146,7 @@ def ask_document(job_id: str, payload: AskRequest):
         from tender_extraction.qa import DocumentChatSession
 
         session = DocumentChatSession(
-            pdf_path,
+            file_path,
             persist_dir=str(OUTPUT_DIR / "_qa_qdrant_storage"),
             force_reindex=False,
         )

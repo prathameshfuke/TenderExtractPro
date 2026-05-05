@@ -12,9 +12,16 @@ from __future__ import annotations
 
 import logging
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pdfplumber
+
+from tender_extraction.vision import (
+    extract_tables_from_image_file,
+    extract_tables_from_pdf_page,
+    should_try_multimodal_table_fallback,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -25,25 +32,28 @@ logger = logging.getLogger(__name__)
 # ("Item", "Items", "Item Description", "Description of Item", etc.)
 
 _ITEM_PATTERNS = re.compile(
-    r"(item|description|name|particular|component|material|s\.?\s*no|sr\.?\s*no)",
+    r"(item|description|name|particular|component|material|s\.?\s*no|sr\.?\s*no|क्र\.?\s*सं|विवरण|सामग्री)",
     re.IGNORECASE,
 )
 _SPEC_PATTERNS = re.compile(
-    r"(specif|requirement|standard|detail|param|characteristic)",
+    r"(specif|requirement|standard|detail|param|characteristic|तकनीकी|विनिर्देश|आवश्यकता|मानक)",
     re.IGNORECASE,
 )
-_UNIT_PATTERNS = re.compile(r"(unit|uom|measure)", re.IGNORECASE)
+_UNIT_PATTERNS = re.compile(r"(unit|uom|measure|इकाई)", re.IGNORECASE)
 _VALUE_PATTERNS = re.compile(
-    r"(value|quantity|qty|amount|number|numeric|vol|rate)", re.IGNORECASE
+    r"(value|quantity|qty|amount|number|numeric|vol|rate|मात्रा|संख्या|दर)", re.IGNORECASE
 )
-_TOLERANCE_PATTERNS = re.compile(r"(tolerance|variation|range|limit)", re.IGNORECASE)
+_TOLERANCE_PATTERNS = re.compile(r"(tolerance|variation|range|limit|सहनशीलता|सीमा)", re.IGNORECASE)
 _STANDARD_PATTERNS = re.compile(
-    r"(standard|code|reference|is[\s:]|astm|iso|bis)", re.IGNORECASE
+    r"(standard|code|reference|is[\s:]|astm|iso|bis|मानक|कोड|संदर्भ)", re.IGNORECASE
 )
-_MATERIAL_PATTERNS = re.compile(r"(material|grade|type|class)", re.IGNORECASE)
+_MATERIAL_PATTERNS = re.compile(r"(material|grade|type|class|सामग्री|ग्रेड|प्रकार)", re.IGNORECASE)
 
 
-def extract_tables(pdf_path: str) -> List[Dict[str, Any]]:
+def extract_tables(
+    pdf_path: str,
+    pages: Optional[List[Dict[str, Any]]] = None,
+) -> List[Dict[str, Any]]:
     """
     Extract all tables from a PDF, preserving their structure.
 
@@ -59,6 +69,7 @@ def extract_tables(pdf_path: str) -> List[Dict[str, Any]]:
     table_counter = 0
 
     try:
+        page_hints = {page["page"]: page for page in (pages or [])}
         with pdfplumber.open(pdf_path) as pdf:
             for page_idx, page in enumerate(pdf.pages, start=1):
                 # Strategy 1: Line-based detection (best for bordered tables).
@@ -77,25 +88,21 @@ def extract_tables(pdf_path: str) -> List[Dict[str, Any]]:
 
                 tables_via_lines = page.extract_tables(line_settings) or []
 
-                # Strategy 2: Text-based detection (fallback for borderless tables)
+                # Strategy 2: Text-based detection for borderless/aligned tables.
                 tables_via_text = []
-                if len(tables_via_lines) == 0:
-                    text_settings = {
-                        "vertical_strategy": "text",
-                        "horizontal_strategy": "text",
-                        "snap_tolerance": 5,
-                        "min_words_vertical": 2,
-                        "min_words_horizontal": 2,
-                    }
-                    try:
-                        tables_via_text = page.extract_tables(text_settings) or []
-                    except Exception:
-                        # text-based detection can fail on pages with very
-                        # little content. Not critical, just skip.
-                        pass
+                text_settings = {
+                    "vertical_strategy": "text",
+                    "horizontal_strategy": "text",
+                    "snap_tolerance": 5,
+                    "min_words_vertical": 2,
+                    "min_words_horizontal": 2,
+                }
+                try:
+                    tables_via_text = page.extract_tables(text_settings) or []
+                except Exception:
+                    pass
 
-                # Use whichever strategy found more tables
-                raw_tables = tables_via_lines if len(tables_via_lines) >= len(tables_via_text) else tables_via_text
+                raw_tables = _deduplicate_raw_tables(tables_via_lines + tables_via_text)
 
                 for raw_table in raw_tables:
                     # Skip tables with only 1 row (just a header, no data)
@@ -126,6 +133,21 @@ def extract_tables(pdf_path: str) -> List[Dict[str, Any]]:
                         "raw": raw_table,
                     })
 
+                if should_try_multimodal_table_fallback(
+                    page_number=page_idx,
+                    conventional_tables_count=len(raw_tables),
+                    page_hint=page_hints.get(page_idx),
+                ):
+                    mm_tables = extract_tables_from_pdf_page(pdf_path, page_idx)
+                    for mm_table in mm_tables:
+                        if _table_signature(mm_table["headers"], mm_table["rows"]) in {
+                            _table_signature(item["headers"], item["rows"])
+                            for item in tables_out
+                            if item["page"] == page_idx
+                        }:
+                            continue
+                        tables_out.append(mm_table)
+
         logger.info(
             "Extracted %d tables from %s across %d pages",
             len(tables_out), pdf_path, len(set(t["page"] for t in tables_out))
@@ -139,7 +161,60 @@ def extract_tables(pdf_path: str) -> List[Dict[str, Any]]:
     return tables_out
 
 
+def extract_docx_tables(docx_path: str) -> List[Dict[str, Any]]:
+    from docx import Document
+
+    document = Document(docx_path)
+    tables_out: List[Dict[str, Any]] = []
+    for table_idx, table in enumerate(document.tables, start=1):
+        cleaned_rows = [
+            [" ".join((cell.text or "").split()) for cell in row.cells]
+            for row in table.rows
+        ]
+        cleaned_rows = [row for row in cleaned_rows if any(cell.strip() for cell in row)]
+        if len(cleaned_rows) < 2:
+            continue
+        tables_out.append(
+            {
+                "table_id": f"docx_table_{table_idx:03d}",
+                "page": 1,
+                "headers": cleaned_rows[0],
+                "rows": cleaned_rows[1:],
+                "bbox": None,
+                "raw": cleaned_rows,
+            }
+        )
+    return tables_out
+
+
+def extract_image_tables(image_path: str) -> List[Dict[str, Any]]:
+    return extract_tables_from_image_file(image_path)
+
+
 SPEC_TABLE_MIN_PAGE = 15  # Skip tables before this page — they're admin/legal
+
+
+def _deduplicate_raw_tables(raw_tables: List[List[List[Optional[str]]]]) -> List[List[List[Optional[str]]]]:
+    seen = set()
+    deduped = []
+    for raw_table in raw_tables:
+        cleaned = _clean_table(raw_table)
+        signature = _table_signature(cleaned[0] if cleaned else [], cleaned[1:] if len(cleaned) > 1 else [])
+        if signature in seen:
+            continue
+        seen.add(signature)
+        deduped.append(raw_table)
+    return deduped
+
+
+def _table_signature(headers: List[str], rows: List[List[str]]) -> str:
+    normalized_rows = rows[:8]
+    return repr(
+        (
+            tuple(_clean_spec_text(header) for header in headers),
+            tuple(tuple(_clean_spec_text(cell) for cell in row) for row in normalized_rows),
+        )
+    )
 
 
 def _looks_like_serial_label(text: str) -> bool:
@@ -174,6 +249,42 @@ def _derive_component_and_spec(item_name: str, spec_text: str) -> tuple[str, str
 
     return item_name or "NOT_FOUND", spec_text or "NOT_FOUND"
 
+
+def _looks_like_technical_table(headers: List[str], rows: List[List[str]], page: int) -> bool:
+    header_text = " ".join(headers).lower()
+    if any(
+        keyword in header_text
+        for keyword in (
+            "specification",
+            "technical",
+            "parameter",
+            "requirement",
+            "material",
+            "grade",
+            "tolerance",
+            "standard",
+            "विनिर्देश",
+            "तकनीकी",
+            "सामग्री",
+            "मानक",
+        )
+    ):
+        return True
+
+    if page >= SPEC_TABLE_MIN_PAGE:
+        return True
+
+    value_like_rows = 0
+    for row in rows[:10]:
+        populated = [cell for cell in row if cell.strip()]
+        if len(populated) < 2:
+            continue
+        numeric_cells = sum(bool(re.search(r"\d", cell)) for cell in populated)
+        alpha_cells = sum(any(char.isalpha() for char in cell) for cell in populated)
+        if numeric_cells >= 1 and alpha_cells >= 2:
+            value_like_rows += 1
+    return value_like_rows >= 2
+
 def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
     """
     Convert a structured table into a list of specification dicts.
@@ -184,19 +295,15 @@ def parse_table_to_specs(table: Dict[str, Any]) -> List[Dict[str, Any]]:
     the first column as item_name and concatenating the rest as
     specification_text. Not perfect, but better than losing the data.
     """
-    # Skip admin tables entirely
-    if table.get("page", 0) < SPEC_TABLE_MIN_PAGE:
-        if not any(kw in " ".join(str(h) for h in table.get("headers", [])).lower() 
-                   for kw in ["specification", "technical", "parameter", "requirement", 
-                               "material", "grade", "tolerance", "standard"]):
-            return []
-
     headers = table.get("headers", [])
     rows = table.get("rows", [])
     table_id = table.get("table_id", "unknown")
     page = table.get("page", 0)
 
     if not headers or not rows:
+        return []
+
+    if not _looks_like_technical_table(headers, rows, page):
         return []
 
     col_map = _map_columns(headers)

@@ -73,13 +73,10 @@ class ChunkingConfig:
 @dataclass
 class RetrievalConfig:
     """
-    ChromaDB + cross-encoder reranking retrieval settings.
+    Qdrant + cross-encoder reranking retrieval settings.
 
-    Upgraded from FAISS+BM25 to ChromaDB with persistent collections
-    and cross-encoder reranking. The all-mpnet-base-v2 model gives
-    ~10% better semantic similarity than MiniLM on our benchmarks.
-    Cross-encoder reranking on top-50 candidates before selecting
-    final top-k gives another ~8% MRR improvement.
+    Upgraded from FAISS+BM25 to Qdrant-backed parent/child retrieval with
+    persistent collections and optional cross-encoder reranking.
     """
     embedding_model: str = "BAAI/bge-large-en-v1.5"
     rerank_model: str = "cross-encoder/ms-marco-MiniLM-L-6-v2"
@@ -89,6 +86,25 @@ class RetrievalConfig:
     top_k: int = 10
     qdrant_path: str = "./qdrant_storage"
     require_gpu: bool = os.getenv("REQUIRE_GPU", "1") == "1"
+
+
+@dataclass
+class MultimodalConfig:
+    """
+    Optional vision model settings for structure-heavy pages.
+
+    Default to the smaller Qwen2-VL 2B model and local-files-only loading so
+    the main pipeline remains stable on 8 GB-class GPUs and test runs do not
+    trigger surprise model downloads.
+    """
+    enabled: bool = os.getenv("MULTIMODAL_ENABLED", "0") == "1"
+    model_name: str = os.getenv("MULTIMODAL_MODEL_NAME", "Qwen/Qwen2-VL-2B-Instruct")
+    model_path: Optional[str] = os.getenv("MULTIMODAL_MODEL_PATH") or None
+    local_files_only: bool = os.getenv("MULTIMODAL_LOCAL_ONLY", "1") == "1"
+    use_gpu: bool = os.getenv("MULTIMODAL_USE_GPU", "1") == "1"
+    max_new_tokens: int = int(os.getenv("MULTIMODAL_MAX_NEW_TOKENS", "768"))
+    render_scale: float = float(os.getenv("MULTIMODAL_RENDER_SCALE", "2.0"))
+    retry_page_without_tables: bool = os.getenv("MULTIMODAL_RETRY_EMPTY_PAGES", "1") == "1"
 
 
 @dataclass
@@ -144,6 +160,7 @@ class Config:
     ocr: OCRConfig = field(default_factory=OCRConfig)
     chunking: ChunkingConfig = field(default_factory=ChunkingConfig)
     retrieval: RetrievalConfig = field(default_factory=RetrievalConfig)
+    multimodal: MultimodalConfig = field(default_factory=MultimodalConfig)
     llm: LLMConfig = field(default_factory=LLMConfig)
     validation: ValidationConfig = field(default_factory=ValidationConfig)
 
