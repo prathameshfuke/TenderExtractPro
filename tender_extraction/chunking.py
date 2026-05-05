@@ -17,6 +17,7 @@ import uuid
 from typing import Any, Dict, List, Optional, Tuple
 
 from tender_extraction.config import config
+from tender_extraction.model_runtime import SentenceTransformerEmbeddings, get_embedding_device
 from tender_extraction.schemas import Chunk, ChunkMetadata
 
 logger = logging.getLogger(__name__)
@@ -199,18 +200,29 @@ def _chunk_text(
 
 # Singleton model cache for semantic chunking
 _semantic_embed_model = None
+_semantic_splitter = None
 
 def _get_semantic_embed_model():
     global _semantic_embed_model
     if _semantic_embed_model is None:
-        from langchain_community.embeddings import HuggingFaceBgeEmbeddings
-        logger.info("Loading embedding model for semantic chunking: %s", config.retrieval.embedding_model)
-        _semantic_embed_model = HuggingFaceBgeEmbeddings(
-            model_name=config.retrieval.embedding_model,
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
+        logger.info(
+            "Preparing shared embedding model for semantic chunking on %s",
+            get_embedding_device(),
         )
+        _semantic_embed_model = SentenceTransformerEmbeddings()
     return _semantic_embed_model
+
+
+def _get_semantic_splitter():
+    global _semantic_splitter
+    if _semantic_splitter is None:
+        from langchain_experimental.text_splitter import SemanticChunker
+
+        _semantic_splitter = SemanticChunker(
+            _get_semantic_embed_model(),
+            breakpoint_threshold_type="gradient",
+        )
+    return _semantic_splitter
 
 
 def _semantic_split_text(text: str) -> List[str]:
@@ -218,16 +230,7 @@ def _semantic_split_text(text: str) -> List[str]:
     Use LangChain's SemanticChunker to split text based on embedding distances.
     """
     try:
-        from langchain_experimental.text_splitter import SemanticChunker
-        
-        embed_model = _get_semantic_embed_model()
-        
-        splitter = SemanticChunker(
-            embed_model, 
-            breakpoint_threshold_type="gradient",
-        )
-        
-        docs = splitter.create_documents([text])
+        docs = _get_semantic_splitter().create_documents([text])
         sub_texts = [doc.page_content for doc in docs]
         
         final_texts = []

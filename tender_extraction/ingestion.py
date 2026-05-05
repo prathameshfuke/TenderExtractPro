@@ -231,10 +231,10 @@ def _ingest_docx(path: Path) -> List[Dict[str, Any]]:
     Extract text from DOCX. Treated as a single page since DOCX doesn't
     have a real page concept (page breaks depend on rendering engine).
 
-    We pull both paragraph text and table text separately. Originally we
-    only grabbed paragraphs and missed all the tables — which in a tender
-    doc means missing 70% of the specs. Now we concatenate table content
-    with a marker so the chunker can tell them apart.
+    We keep the page text focused on document paragraphs and let the
+    dedicated DOCX table extractor preserve table structure separately.
+    This avoids indexing the same table twice (once as plain text and once
+    as structured rows), which would otherwise skew retrieval.
     """
     from docx import Document
 
@@ -244,13 +244,6 @@ def _ingest_docx(path: Path) -> List[Dict[str, Any]]:
     for para in doc.paragraphs:
         if para.text.strip():
             parts.append(para.text)
-
-    # Also pull text from tables in the DOCX
-    for table in doc.tables:
-        for row in table.rows:
-            cells = [cell.text.strip() for cell in row.cells if cell.text.strip()]
-            if cells:
-                parts.append(" | ".join(cells))
 
     full_text = "\n".join(parts)
     logger.info("Ingested DOCX: %s (%d text blocks)", path.name, len(parts))

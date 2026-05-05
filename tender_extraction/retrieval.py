@@ -18,7 +18,9 @@ from __future__ import annotations
 import logging
 import io
 import contextlib
+import json
 import re
+import hashlib
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -36,6 +38,7 @@ from qdrant_client.models import (
 )
 
 from tender_extraction.config import config
+from tender_extraction.model_runtime import get_embedding_dimension, get_embedding_model, resolve_embedding_device
 from tender_extraction.schemas import Chunk
 
 logger = logging.getLogger(__name__)
@@ -55,33 +58,10 @@ _SCOPE_TEXT_TERMS = re.compile(
     re.IGNORECASE,
 )
 
-# Singleton model caches
-_embed_model: Optional[SentenceTransformer] = None
 _cross_encoder: Optional[CrossEncoder] = None
 
 
-def _resolve_torch_device() -> str:
-    """Return 'cuda' when available, else 'cpu'."""
-    try:
-        import torch
-        cuda_ok = bool(torch.cuda.is_available())
-        return "cuda" if cuda_ok else "cpu"
-    except Exception:
-        return "cpu"
-
 _BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
-
-
-def _get_embed_model() -> SentenceTransformer:
-    """Lazy-load and cache bge-large-en-v1.5."""
-    global _embed_model
-    if _embed_model is None:
-        model_name = config.retrieval.embedding_model
-        device = _resolve_torch_device()
-        logger.info("Loading embedding model: %s on %s", model_name, device)
-        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
-            _embed_model = SentenceTransformer(model_name, device=device)
-    return _embed_model
 
 
 def _get_cross_encoder() -> CrossEncoder:
@@ -89,7 +69,7 @@ def _get_cross_encoder() -> CrossEncoder:
     global _cross_encoder
     if _cross_encoder is None:
         model_name = config.retrieval.rerank_model
-        device = _resolve_torch_device()
+        device = resolve_embedding_device()
         logger.info("Loading cross-encoder: %s on %s", model_name, device)
         with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             _cross_encoder = CrossEncoder(model_name, max_length=512, device=device)
@@ -107,7 +87,9 @@ class HybridRetriever:
         self._bm25: Optional[BM25Okapi] = None
 
         persist_path = str(persist_dir or config.retrieval.qdrant_path)
-        Path(persist_path).mkdir(parents=True, exist_ok=True)
+        self._persist_path = Path(persist_path)
+        self._persist_path.mkdir(parents=True, exist_ok=True)
+        self._manifest_path = self._persist_path / "_hybrid_manifest.json"
 
         self._qdrant = QdrantClient(path=persist_path)
         self._collection_name: Optional[str] = None
@@ -134,6 +116,7 @@ class HybridRetriever:
 
         self._collection_name = collection_name
         self._parents = {c.chunk_id: c for c in chunks}
+        chunk_fingerprint = self._fingerprint_chunks(chunks)
         
         # Create child chunks
         child_chunks: List[Dict[str, Any]] = []
@@ -154,15 +137,20 @@ class HybridRetriever:
 
         # Qdrant
         existing = {c.name for c in self._qdrant.get_collections().collections}
-        if collection_name in existing and not force_rebuild:
+        manifest = self._load_manifest()
+        if (
+            collection_name in existing
+            and not force_rebuild
+            and manifest.get(collection_name, {}).get("fingerprint") == chunk_fingerprint
+        ):
             logger.info("Reusing Qdrant collection '%s'.", collection_name)
             return
 
         if collection_name in existing:
             self._qdrant.delete_collection(collection_name)
 
-        embed_model = _get_embed_model()
-        embed_dim = embed_model.get_sentence_embedding_dimension()
+        embed_model = get_embedding_model()
+        embed_dim = get_embedding_dimension(embed_model)
         
         logger.info("Encoding %d children...", len(texts_to_index))
         embeddings = embed_model.encode(
@@ -191,6 +179,11 @@ class HybridRetriever:
         for i in range(0, len(points), 1000):
             self._qdrant.upsert(collection_name=collection_name, points=points[i:i+1000])
 
+        manifest[collection_name] = {
+            "fingerprint": chunk_fingerprint,
+            "child_count": len(child_chunks),
+        }
+        self._write_manifest(manifest)
         logger.info("Index built: %d children from %d parents.", len(child_chunks), len(chunks))
 
     def _create_child_texts(self, text: str, size: int = 200, overlap: int = 50) -> List[str]:
@@ -223,7 +216,7 @@ class HybridRetriever:
         bm25_norm = _min_max_normalize(bm25_raw)
 
         # Qdrant
-        embed_model = _get_embed_model()
+        embed_model = get_embedding_model()
         qvec = embed_model.encode([_BGE_QUERY_PREFIX + query], normalize_embeddings=True)[0]
         
         qdrant_hits = self._qdrant.query_points(
@@ -251,21 +244,27 @@ class HybridRetriever:
 
         # Map to parents
         seen_parents = set()
-        final_results = []
+        parent_candidates = []
+        rerank_window = max(top_k, config.retrieval.rerank_top_k)
+        candidate_parent_limit = max(top_k * 4, rerank_window)
         for idx, score in child_scored:
             pid = self._child_chunks[idx]["parent_id"]
             if pid not in seen_parents:
+                chunk = self._parents[pid]
+                if section_filter and section_filter.lower() not in (chunk.metadata.section or "").lower():
+                    continue
                 seen_parents.add(pid)
-                final_results.append({
-                    "chunk": self._parents[pid],
+                parent_candidates.append({
+                    "chunk": chunk,
                     "score": score,
                     "bm25_score": float(bm25_norm[idx]),
                     "embedding_score": hit_id_to_emb_score.get(idx, 0.0)
                 })
-            if len(final_results) >= top_k:
+            if len(parent_candidates) >= candidate_parent_limit:
                 break
-        
-        return final_results
+
+        final_results = self._rerank_parent_candidates(query, parent_candidates, top_k)
+        return final_results[:top_k]
 
     def retrieve_spec_chunks(self, query: str, top_k: int = 15) -> List[Dict[str, Any]]:
         results = self.retrieve(query, top_k=top_k * 2)
@@ -305,6 +304,65 @@ class HybridRetriever:
                 self._qdrant.delete_collection(name)
             except Exception:
                 pass
+            manifest = self._load_manifest()
+            if name in manifest:
+                del manifest[name]
+                self._write_manifest(manifest)
+
+    def _rerank_parent_candidates(
+        self,
+        query: str,
+        candidates: List[Dict[str, Any]],
+        top_k: int,
+    ) -> List[Dict[str, Any]]:
+        if not candidates:
+            return []
+
+        rerank_window = min(len(candidates), max(top_k, config.retrieval.rerank_top_k))
+        if rerank_window <= 0:
+            return candidates[:top_k]
+
+        try:
+            cross_encoder = _get_cross_encoder()
+            pairs = [(query, item["chunk"].text) for item in candidates[:rerank_window]]
+            rerank_scores = cross_encoder.predict(pairs)
+            for item, rerank_score in zip(candidates[:rerank_window], rerank_scores):
+                item["rerank_score"] = float(rerank_score)
+            candidates[:rerank_window] = sorted(
+                candidates[:rerank_window],
+                key=lambda item: (item.get("rerank_score", float("-inf")), item["score"]),
+                reverse=True,
+            )
+        except Exception as exc:
+            logger.warning("Cross-encoder reranking failed (%s). Using fused retrieval scores.", exc)
+
+        return candidates[:top_k]
+
+    def _load_manifest(self) -> Dict[str, Dict[str, Any]]:
+        if not self._manifest_path.exists():
+            return {}
+        try:
+            return json.loads(self._manifest_path.read_text(encoding="utf-8"))
+        except Exception:
+            return {}
+
+    def _write_manifest(self, manifest: Dict[str, Dict[str, Any]]) -> None:
+        self._manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False),
+            encoding="utf-8",
+        )
+
+    def _fingerprint_chunks(self, chunks: List[Chunk]) -> str:
+        payload = [
+            {
+                "chunk_id": chunk.chunk_id,
+                "text": chunk.text,
+                "metadata": chunk.metadata.model_dump(),
+            }
+            for chunk in chunks
+        ]
+        blob = json.dumps(payload, sort_keys=True, ensure_ascii=False).encode("utf-8")
+        return hashlib.sha256(blob).hexdigest()
 
 
 def _min_max_normalize(arr: np.ndarray) -> np.ndarray:

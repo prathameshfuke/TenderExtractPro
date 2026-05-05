@@ -14,6 +14,7 @@ qdrant-client>=1.9.0
 
 # Retrieval — Hybrid BM25 + Qdrant dense vectors + cross-encoder reranking
 sentence-transformers>=3.0.0
+transformers>=5.8.0
 rank-bm25>=0.2.0
 langchain>=1.2.17
 langchain-experimental>=0.4.1
@@ -31,7 +32,6 @@ tiktoken>=0.8.0
 
 # Numerics — numpy 2.4+ required for Python 3.14 (MSVC build, not MINGW)
 numpy>=2.4.0
-faiss-cpu>=1.11.0
 
 # Testing
 pytest>=8.0.0
