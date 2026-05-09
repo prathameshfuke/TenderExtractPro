@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { FileText, X } from 'lucide-react';
+import { X } from 'lucide-react';
+
 import Header from './components/Header';
 import Dashboard from './components/Dashboard';
 import ResultViewer from './components/ResultViewer';
@@ -19,7 +20,7 @@ export default function App() {
   const [showDocs, setShowDocs] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
-  const [sortBy, setSortBy] = useState('recency'); // 'recency' or 'score'
+  const [sortBy, setSortBy] = useState('recency');
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
 
   useEffect(() => {
@@ -27,9 +28,10 @@ export default function App() {
     localStorage.setItem('theme', theme);
   }, [theme]);
 
-  const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
+  const toggleTheme = () => setTheme(prev => (prev === 'light' ? 'dark' : 'light'));
 
   const processedJobs = useMemo(() => {
+    if (!Array.isArray(jobs)) return [];
     let sorted = [...jobs];
     if (sortBy === 'recency') {
       sorted.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
@@ -40,45 +42,22 @@ export default function App() {
   }, [jobs, sortBy]);
 
   const selectedJob = useMemo(
-    () => jobs.find((job) => job.job_id === selectedJobId) || null,
-    [jobs, selectedJobId],
+    () => jobs.find((j) => j.job_id === selectedJobId) || null,
+    [jobs, selectedJobId]
   );
 
   useEffect(() => {
-    let isMounted = true;
-
     const loadJobs = async () => {
       try {
         const res = await api.get('/jobs');
-        if (!isMounted) return;
         setBackendOnline(true);
-        const incoming = Array.isArray(res.data) ? res.data : [];
-        setJobs(incoming);
+        setJobs(Array.isArray(res.data) ? res.data : []);
       } catch (err) {
         setBackendOnline(false);
-        console.error('Failed to load jobs', err);
       }
     };
-
     loadJobs();
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    const timer = setInterval(async () => {
-      try {
-        const res = await api.get('/jobs');
-        const incoming = Array.isArray(res.data) ? res.data : [];
-        setBackendOnline(true);
-        setJobs(incoming);
-      } catch (err) {
-        setBackendOnline(false);
-        console.error('Failed to refresh jobs', err);
-      }
-    }, 2000);
-
+    const timer = setInterval(loadJobs, 4000);
     return () => clearInterval(timer);
   }, []);
 
@@ -87,18 +66,20 @@ export default function App() {
     setSelectedJobId(newJob.job_id);
     setShowProfile(false);
     setShowUploadModal(false);
+    setHasStarted(true);
   };
 
   const handleLogoClick = () => {
     setSelectedJobId(null);
     setShowProfile(false);
+    setShowDocs(false);
   };
 
-  const isLanding = !hasStarted && jobs.length === 0;
+  const isLanding = !hasStarted && !showDocs && jobs.length === 0;
 
   return (
     <div className="app-container">
-      {/* Atmospheric Orbs */}
+      {/* Background Ambience */}
       <div className="orb orb-1"></div>
       <div className="orb orb-2"></div>
       <div className="orb orb-3"></div>
@@ -106,16 +87,9 @@ export default function App() {
 
       {!backendOnline && (
         <div style={{
-          position: 'fixed',
-          top: 12,
-          right: 12,
-          zIndex: 9999,
-          background: 'var(--error)',
-          color: 'white',
-          padding: '10px 16px',
-          borderRadius: '9999px',
-          fontSize: '0.85rem',
-          fontWeight: 500,
+          position: 'fixed', top: 12, right: 12, zIndex: 9999,
+          background: 'var(--error)', color: 'white', padding: '10px 16px',
+          borderRadius: '9999px', fontSize: '0.85rem', fontWeight: 600,
           boxShadow: '0 4px 12px rgba(0,0,0,0.1)'
         }}>
           API Offline
@@ -132,36 +106,31 @@ export default function App() {
           theme={theme}
           onToggleTheme={toggleTheme}
           onShowDocs={() => { setShowDocs(true); setSelectedJobId(null); setShowProfile(false); setHasStarted(true); }}
-          const isLanding = !hasStarted && jobs.length === 0;
+          showDocs={showDocs}
+        />
+      )}
 
-          return (
-            <div className="app-container">
-          ...
-              <main className="main-content">
-                {isLanding && !showDocs ? (
-                  <LandingPage 
-                    onGetStarted={() => setHasStarted(true)} 
-                    onShowDocs={() => setShowDocs(true)}
-                  />
-                ) : showDocs ? (
-                  <div style={{ flex: 1 }}>
-                    <Documentation onBack={() => setShowDocs(false)} />
-                  </div>
-                ) : showProfile ? (
-                  <div style={{ flex: 1, overflowY: 'auto' }}>
-                    <ProfilePanel />
-                  </div>
-                ) : (!selectedJobId || jobs.length === 0) ? (
-                  <Dashboard 
-                    jobs={processedJobs}
-                    onSelectJob={(job) => setSelectedJobId(job.job_id)}
-                    sortBy={sortBy}
-                    onSortChange={setSortBy}
-                  />
-                ) : (
-                  <ResultViewer job={selectedJob} onBack={handleLogoClick} />
-                )}
-              </main>
+      <main className="main-content">
+        {isLanding ? (
+          <LandingPage 
+            onGetStarted={() => setHasStarted(true)} 
+            onShowDocs={() => setShowDocs(true)}
+          />
+        ) : showDocs ? (
+          <Documentation onBack={() => setShowDocs(false)} />
+        ) : showProfile ? (
+          <ProfilePanel />
+        ) : (!selectedJobId || (selectedJobId && !selectedJob)) ? (
+          <Dashboard 
+            jobs={processedJobs}
+            onSelectJob={(job) => setSelectedJobId(job.job_id)}
+            sortBy={sortBy}
+            onSortChange={setSortBy}
+          />
+        ) : (
+          <ResultViewer job={selectedJob} onBack={handleLogoClick} />
+        )}
+      </main>
 
       {showUploadModal && (
         <div className="modal-overlay" onClick={() => setShowUploadModal(false)}>
@@ -170,7 +139,7 @@ export default function App() {
               <X size={20} />
             </button>
             <div style={{ textAlign: 'center', marginBottom: '32px' }}>
-              <h2 style={{ fontSize: '24px', fontWeight: 300, marginBottom: '8px' }}>Analyze New Tender</h2>
+              <h2 style={{ fontSize: '24px', fontWeight: 800, marginBottom: '8px', letterSpacing: '-0.02em', color: 'var(--text-ink)' }}>Analyze New Tender</h2>
               <p style={{ color: 'var(--text-muted)' }}>Upload a PDF to begin the analysis</p>
             </div>
             <UploadZone onUploadComplete={handleUploadComplete} />

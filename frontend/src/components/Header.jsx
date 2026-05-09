@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, User, FileText, LayoutGrid, Sun, Moon } from 'lucide-react';
+import { Plus, User, FileText, LayoutGrid, Sun, Moon, BookOpen } from 'lucide-react';
 import logo from '../assets/logo.png';
 
 export default function Header({ 
@@ -21,8 +21,8 @@ export default function Header({
             <img src={logo} alt="Logo" style={{ height: '32px', width: 'auto' }} />
           </div>
           <div className="brand" style={{ letterSpacing: '-0.04em', fontSize: '22px' }}>
-            <span className="brand-name" style={{ fontWeight: 800 }}>TenderExtract</span>
-            <span className="brand-suffix" style={{ fontWeight: 300, opacity: 0.6 }}>PRO</span>
+            <span className="brand-name" style={{ fontWeight: 800, color: 'var(--text-ink)' }}>TenderExtract</span>
+            <span className="brand-suffix" style={{ fontWeight: 300, opacity: 0.6, color: 'var(--text-muted)' }}>PRO</span>
           </div>
         </div>
 
