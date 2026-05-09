@@ -16,6 +16,14 @@ export default function App() {
   const [showProfile, setShowProfile] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [sortBy, setSortBy] = useState('recency'); // 'recency' or 'score'
+  const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
+  }, [theme]);
+
+  const toggleTheme = () => setTheme(prev => prev === 'light' ? 'dark' : 'light');
 
   const processedJobs = useMemo(() => {
     let sorted = [...jobs];
@@ -114,6 +122,8 @@ export default function App() {
         onLogoClick={handleLogoClick}
         showProfile={showProfile}
         hasSelectedJob={!!selectedJobId}
+        theme={theme}
+        onToggleTheme={toggleTheme}
       />
 
       <main className="main-content">

@@ -9,9 +9,15 @@ export default function SourceDrawer({ isOpen, onClose, source, title, specs = {
 
     return (
         <div className={`source-drawer ${isOpen ? 'open' : ''}`}>
-            <div className="drawer-header">
+            <div className="drawer-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <h3>{title}</h3>
-                <button className="close-btn" onClick={onClose}><X size={20} /></button>
+                <button 
+                  className="icon-btn" 
+                  onClick={onClose}
+                  style={{ borderRadius: '50%' }}
+                >
+                  <X size={20} />
+                </button>
             </div>
 
             <div className="drawer-content">
@@ -44,13 +50,13 @@ export default function SourceDrawer({ isOpen, onClose, source, title, specs = {
                                 No structured parameters were extracted for this component.
                             </div>
                         ) : (
-                            <div style={{ border: '1px solid var(--border-color)' }}>
+                            <div style={{ border: '1px solid var(--hairline)', borderRadius: '12px', overflow: 'hidden' }}>
                                 {entries.map(([key, value]) => (
-                                    <div key={key} style={{ display: 'flex', borderBottom: '1px solid var(--border-color)' }}>
-                                        <div style={{ width: '38%', padding: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem' }}>
+                                    <div key={key} style={{ display: 'flex', borderBottom: '1px solid var(--hairline)' }}>
+                                        <div style={{ width: '38%', padding: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.75rem', background: 'var(--canvas-soft)' }}>
                                             {key}
                                         </div>
-                                        <div style={{ width: '62%', padding: '10px', fontSize: '0.82rem' }}>
+                                        <div style={{ width: '62%', padding: '10px', fontSize: '0.82rem', color: 'var(--text-body)' }}>
                                             {value}
                                         </div>
                                     </div>

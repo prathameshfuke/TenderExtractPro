@@ -169,7 +169,7 @@ export default function ResultViewer({ job, onBack }) {
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
-      <div className="result-header" style={{ padding: '32px 40px', background: 'white', borderBottom: '1px solid var(--hairline)' }}>
+      <div className="result-header" style={{ padding: '32px 40px', background: 'var(--surface-card)', borderBottom: '1px solid var(--hairline)' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
            <button className="icon-btn" onClick={onBack} title="Back to Workspace">
              <ArrowLeft size={20} />

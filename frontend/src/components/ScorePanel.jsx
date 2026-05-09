@@ -83,7 +83,7 @@ export default function ScorePanel({ jobId, initialData }) {
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: '32px', marginBottom: '40px' }}>
-        <div style={{ background: 'white', padding: '32px', borderRadius: '24px', border: '1px solid var(--hairline)', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
+        <div style={{ background: 'var(--surface-card)', padding: '32px', borderRadius: '24px', border: '1px solid var(--hairline)', boxShadow: '0 4px 20px rgba(0,0,0,0.03)' }}>
           <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '16px', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700 }}>
             Overall Match Score
           </div>
@@ -109,7 +109,7 @@ export default function ScorePanel({ jobId, initialData }) {
         </div>
 
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          <div style={{ background: 'white', padding: '24px', borderRadius: '20px', border: '1px solid var(--hairline)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div style={{ background: 'var(--surface-card)', padding: '24px', borderRadius: '20px', border: '1px solid var(--hairline)', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, marginBottom: '4px' }}>
                 Cost Feasibility
@@ -125,9 +125,9 @@ export default function ScorePanel({ jobId, initialData }) {
             </div>
           </div>
 
-          <div style={{ background: 'var(--primary-ink)', color: 'white', padding: '24px', borderRadius: '20px', position: 'relative', overflow: 'hidden' }}>
+          <div style={{ background: 'var(--primary-ink)', color: 'var(--canvas)', padding: '24px', borderRadius: '20px', position: 'relative', overflow: 'hidden' }}>
             <div style={{ position: 'relative', zIndex: 1 }}>
-              <div style={{ fontSize: '10px', color: 'rgba(255,255,255,0.6)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, marginBottom: '4px' }}>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.1em', fontWeight: 700, marginBottom: '4px' }}>
                 Strategic Priority
               </div>
               <div style={{ fontSize: '1.5rem', fontWeight: 500 }}>
@@ -141,7 +141,7 @@ export default function ScorePanel({ jobId, initialData }) {
         </div>
       </div>
 
-      <div style={{ background: 'white', padding: '32px', borderRadius: '24px', border: '1px solid var(--hairline)' }}>
+      <div style={{ background: 'var(--surface-card)', padding: '32px', borderRadius: '24px', border: '1px solid var(--hairline)' }}>
         <h3 style={{ margin: '0 0 20px 0', fontSize: '1.25rem', fontWeight: 400, color: 'var(--text-ink)', display: 'flex', alignItems: 'center', gap: '10px' }}>
           <Info size={20} color="var(--text-muted)" />
           Strategic Reasoning

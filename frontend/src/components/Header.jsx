@@ -1,13 +1,21 @@
 import React from 'react';
-import { Plus, User, FileText, LayoutGrid } from 'lucide-react';
+import { Plus, User, FileText, LayoutGrid, Sun, Moon } from 'lucide-react';
 
-export default function Header({ onShowProfile, onUploadClick, onLogoClick, showProfile, hasSelectedJob }) {
+export default function Header({ 
+  onShowProfile, 
+  onUploadClick, 
+  onLogoClick, 
+  showProfile, 
+  hasSelectedJob,
+  theme,
+  onToggleTheme 
+}) {
   return (
     <header className="app-header">
       <div className="header-content">
         <div className="header-left" onClick={onLogoClick} style={{ cursor: 'pointer' }}>
           <div className="logo-icon">
-            <FileText size={20} color="white" />
+            <FileText size={20} color={theme === 'dark' ? '#0c0a09' : 'white'} />
           </div>
           <div className="brand">
             <span className="brand-name">TenderExtract</span>
@@ -26,6 +34,17 @@ export default function Header({ onShowProfile, onUploadClick, onLogoClick, show
         </nav>
 
         <div className="header-right">
+          <button 
+            className="icon-btn" 
+            onClick={onToggleTheme} 
+            title={theme === 'dark' ? 'Switch to Light' : 'Switch to Dark'}
+            style={{ borderRadius: '50%' }}
+          >
+            {theme === 'dark' ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+
+          <div className="v-divider"></div>
+
           <button className="primary-pill" onClick={onUploadClick}>
             <Plus size={18} />
             <span>Analyze Tender</span>
