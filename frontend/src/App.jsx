@@ -6,6 +6,7 @@ import Dashboard from './components/Dashboard';
 import ResultViewer from './components/ResultViewer';
 import ProfilePanel from './components/ProfilePanel';
 import UploadZone from './components/UploadZone';
+import LandingPage from './components/LandingPage';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -15,6 +16,7 @@ export default function App() {
   const [backendOnline, setBackendOnline] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
+  const [hasStarted, setHasStarted] = useState(false);
   const [sortBy, setSortBy] = useState('recency'); // 'recency' or 'score'
   const [theme, setTheme] = useState(localStorage.getItem('theme') || 'light');
 
@@ -90,6 +92,8 @@ export default function App() {
     setShowProfile(false);
   };
 
+  const isLanding = !hasStarted && jobs.length === 0;
+
   return (
     <div className="app-container">
       {/* Atmospheric Orbs */}
@@ -116,18 +120,22 @@ export default function App() {
         </div>
       )}
 
-      <Header 
-        onShowProfile={() => { setShowProfile(true); setSelectedJobId(null); }}
-        onUploadClick={() => setShowUploadModal(true)}
-        onLogoClick={handleLogoClick}
-        showProfile={showProfile}
-        hasSelectedJob={!!selectedJobId}
-        theme={theme}
-        onToggleTheme={toggleTheme}
-      />
+      {!isLanding && (
+        <Header 
+          onShowProfile={() => { setShowProfile(true); setSelectedJobId(null); setHasStarted(true); }}
+          onUploadClick={() => setShowUploadModal(true)}
+          onLogoClick={handleLogoClick}
+          showProfile={showProfile}
+          hasSelectedJob={!!selectedJobId}
+          theme={theme}
+          onToggleTheme={toggleTheme}
+        />
+      )}
 
       <main className="main-content">
-        {showProfile ? (
+        {isLanding ? (
+          <LandingPage onGetStarted={() => setHasStarted(true)} />
+        ) : showProfile ? (
           <div style={{ flex: 1, overflowY: 'auto' }}>
             <ProfilePanel />
           </div>

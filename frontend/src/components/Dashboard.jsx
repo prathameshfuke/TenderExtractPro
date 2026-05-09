@@ -11,28 +11,27 @@ export default function Dashboard({ jobs, onSelectJob, sortBy, onSortChange }) {
         </div>
         
         <div className="dashboard-controls">
-          <div className="search-box">
-            <Search size={16} />
-            <input type="text" placeholder="Search tenders..." />
+          <div className="dashboard-search">
+            <Search size={18} />
+            <input type="text" placeholder="Filter documents by name or content..." />
           </div>
           
-          <div className="v-divider"></div>
-          
-          <div className="sort-group">
-            <button 
-              className={`sort-btn ${sortBy === 'recency' ? 'active' : ''}`}
-              onClick={() => onSortChange('recency')}
-            >
-              <Clock size={14} />
-              Recent
-            </button>
-            <button 
-              className={`sort-btn ${sortBy === 'score' ? 'active' : ''}`}
-              onClick={() => onSortChange('score')}
-            >
-              <Award size={14} />
-              Match
-            </button>
+          <div className="dashboard-filters">
+            <span className="filter-label">Sort by</span>
+            <div className="filter-toggle">
+              <button 
+                className={sortBy === 'recency' ? 'active' : ''}
+                onClick={() => onSortChange('recency')}
+              >
+                Date
+              </button>
+              <button 
+                className={sortBy === 'score' ? 'active' : ''}
+                onClick={() => onSortChange('score')}
+              >
+                Match
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -47,10 +46,11 @@ export default function Dashboard({ jobs, onSelectJob, sortBy, onSortChange }) {
             <p>Upload a PDF document to start the extraction pipeline.</p>
           </div>
         ) : (
-          jobs.map((job) => (
+          jobs.map((job, idx) => (
             <div 
               key={job.job_id} 
-              className={`dashboard-card ${job.status}`}
+              className={`dashboard-card ${job.status} animate-fade`}
+              style={{ animationDelay: `${idx * 0.05}s` }}
               onClick={() => onSelectJob(job)}
             >
               <div className="card-header">

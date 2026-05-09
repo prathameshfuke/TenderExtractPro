@@ -17,9 +17,9 @@ export default function Header({
           <div className="logo-icon">
             <FileText size={20} color={theme === 'dark' ? '#0c0a09' : 'white'} />
           </div>
-          <div className="brand">
-            <span className="brand-name">TenderExtract</span>
-            <span className="brand-suffix">Pro</span>
+          <div className="brand" style={{ letterSpacing: '-0.04em', fontSize: '22px' }}>
+            <span className="brand-name" style={{ fontWeight: 800 }}>TenderExtract</span>
+            <span className="brand-suffix" style={{ fontWeight: 300, opacity: 0.6 }}>PRO</span>
           </div>
         </div>
 
