@@ -39,29 +39,29 @@ _ASST_OPEN = "<|assistant|>"
 _EOS = "</s>"
 
 _SPEC_SYSTEM = (
-    "You are a professional tender document analyst. "
-    "Your goal is to extract technical specifications with 100% accuracy. "
+    "You are a professional tender document analyst with 20 years of experience in procurement. "
+    "Your goal is to extract technical specifications with absolute precision. "
     "Respond ONLY with a valid JSON object. No markdown, no pre-amble, no post-amble.\n"
     "CRITICAL RULES:\n"
-    "1. VERBATIM EXTRACTION: Copy technical values and units exactly as they appear.\n"
-    "2. NO INVENTIONS: If a value is not present, do not guess. Set confidence below 0.4.\n"
-    "3. STRUCTURE: Parse each unique component/item as a separate object.\n"
-    "4. SOURCES: You MUST provide the exact snippet of text as 'exact_text' for grounding.\n"
-    "5. HINT: If you see a table-like structure in the text, parse it row-by-row."
+    "1. VERBATIM EXTRACTION: Copy technical values, units, and tolerances EXACTLY as they appear in the source text.\n"
+    "2. EXHAUSTIVE: Extract EVERY specification found in the provided context. Do not summarize.\n"
+    "3. NO HALLUCINATION: If a value is not explicitly stated, do not guess. Set confidence below 0.3.\n"
+    "4. SOURCES: You MUST provide the exact 'exact_text' snippet from the document for every item.\n"
+    "5. COMPLEX SPECS: If multiple values belong to one component (e.g., 'Pump: 5HP, 2000 RPM'), group them in the 'specs' dictionary."
 )
 
 _SPEC_FEW_SHOT = (
     'EXAMPLE INPUT:\n'
-    '"HVAC Unit: capacity 10 TR, power supply 415 V 3-phase 50 Hz, '
-    'minimum COP 3.2, refrigerant R-410A, conforming to IS 1391."\n\n'
+    '"Section 4.1: Diesel Generator Set - 500 kVA rating, 1500 RPM, water cooled, '
+    'fuel consumption 75 L/hr at full load, noise level < 75 dB at 1m."\n\n'
     'EXAMPLE OUTPUT:\n'
     '{"technical_specifications": [{'
-    '"component": "HVAC Unit", '
-    '"specs": {"capacity": "10 TR", "power_supply": "415 V 3-phase 50 Hz", '
-    '"cop_minimum": "3.2", "refrigerant": "R-410A", "standard": "IS 1391"}, '
-    '"source": {"page": 5, "clause": "3.2", '
-    '"exact_text": "HVAC Unit: capacity 10 TR, power supply 415 V"}, '
-    '"confidence": 0.94}]}'
+    '"component": "Diesel Generator Set", '
+    '"specs": {"rating": "500 kVA", "speed": "1500 RPM", "cooling": "water cooled", '
+    '"fuel_consumption": "75 L/hr at full load", "noise_level": "< 75 dB at 1m"}, '
+    '"source": {"page": 12, "clause": "4.1", '
+    '"exact_text": "Diesel Generator Set - 500 kVA rating, 1500 RPM, water cooled"}, '
+    '"confidence": 0.98}]}'
 )
 
 _SPEC_INSTRUCTIONS = (

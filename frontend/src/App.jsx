@@ -20,6 +20,17 @@ export default function App() {
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [backendOnline, setBackendOnline] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
+  const [sortBy, setSortBy] = useState('recency'); // 'recency' or 'score'
+
+  const processedJobs = useMemo(() => {
+    let sorted = [...jobs];
+    if (sortBy === 'recency') {
+      sorted.sort((a, b) => (b.created_at || 0) - (a.created_at || 0));
+    } else if (sortBy === 'score') {
+      sorted.sort((a, b) => (b.match_score || 0) - (a.match_score || 0));
+    }
+    return sorted;
+  }, [jobs, sortBy]);
 
   const selectedJob = useMemo(
     () => jobs.find((job) => job.job_id === selectedJobId) || null,
@@ -34,11 +45,15 @@ export default function App() {
         const res = await api.get('/jobs');
         if (!isMounted) return;
         setBackendOnline(true);
-
-        const sorted = sortJobsByRecency(Array.isArray(res.data) ? res.data : []);
-        setJobs(sorted);
-        if (!selectedJobId && sorted.length > 0) {
-          setSelectedJobId(sorted[0].job_id);
+        const incoming = Array.isArray(res.data) ? res.data : [];
+        setJobs(incoming);
+        
+        if (!selectedJobId && incoming.length > 0) {
+          // If sorting by score, we might want the highest score first
+          const firstJob = sortBy === 'score' 
+            ? [...incoming].sort((a,b) => (b.match_score || 0) - (a.match_score || 0))[0]
+            : [...incoming].sort((a,b) => (b.created_at || 0) - (a.created_at || 0))[0];
+          setSelectedJobId(firstJob.job_id);
         }
       } catch (err) {
         setBackendOnline(false);
@@ -50,7 +65,7 @@ export default function App() {
     return () => {
       isMounted = false;
     };
-  }, [selectedJobId]);
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(async () => {
@@ -58,7 +73,7 @@ export default function App() {
         const res = await api.get('/jobs');
         const incoming = Array.isArray(res.data) ? res.data : [];
         setBackendOnline(true);
-        setJobs(sortJobsByRecency(incoming));
+        setJobs(incoming);
       } catch (err) {
         setBackendOnline(false);
         console.error('Failed to refresh jobs', err);
@@ -69,7 +84,7 @@ export default function App() {
   }, []);
 
   const handleUploadComplete = (newJob) => {
-    setJobs((prev) => sortJobsByRecency([newJob, ...prev]));
+    setJobs((prev) => [newJob, ...prev]);
     setSelectedJobId(newJob.job_id);
     setShowProfile(false);
   };
@@ -101,12 +116,14 @@ export default function App() {
       )}
 
       <Sidebar
-        jobs={jobs}
+        jobs={processedJobs}
         selectedJob={selectedJob}
         showProfile={showProfile}
         onSelectJob={(job) => { setSelectedJobId(job.job_id); setShowProfile(false); }}
         onShowProfile={() => setShowProfile(true)}
         onUploadComplete={handleUploadComplete}
+        sortBy={sortBy}
+        onSortChange={setSortBy}
       />
 
       <main className="main-content">

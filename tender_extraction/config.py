@@ -86,7 +86,7 @@ class RetrievalConfig:
     bm25_weight: float = 0.35
     embedding_weight: float = 0.65
     rerank_top_k: int = 40
-    top_k: int = 10
+    top_k: int = 15
     qdrant_path: str = "./qdrant_storage"
     require_gpu: bool = os.getenv("REQUIRE_GPU", "1") == "1"
 
@@ -105,7 +105,7 @@ class LLMConfig:
         "LLM_MODEL_PATH",
         "models/mistral-7b-instruct-v0.2.Q4_K_M.gguf",
     )
-    n_ctx: int = 4096
+    n_ctx: int = 8192
     n_threads: Optional[int] = 8
     n_gpu_layers: int = -1
     require_gpu: bool = os.getenv("REQUIRE_GPU", "1") == "1"

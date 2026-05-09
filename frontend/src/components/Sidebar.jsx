@@ -1,33 +1,55 @@
-import React from 'react';
-import { FileText, Building } from 'lucide-react';
+import React, { useState } from 'react';
+import { FileText, Building, ArrowUpDown, Filter, User } from 'lucide-react';
 import JobCard from './JobCard';
 import UploadZone from './UploadZone';
 
-export default function Sidebar({ jobs, selectedJob, showProfile, onSelectJob, onShowProfile, onUploadComplete }) {
+export default function Sidebar({ 
+  jobs, 
+  selectedJob, 
+  showProfile, 
+  onSelectJob, 
+  onShowProfile, 
+  onUploadComplete,
+  sortBy,
+  onSortChange
+}) {
     return (
         <aside className="sidebar">
             <div className="sidebar-header">
-                <span className="tagline">Intelligence Platform</span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span className="tagline">Intelligence Platform</span>
+                    <button 
+                        className={`icon-btn ${showProfile ? 'active' : ''}`}
+                        onClick={onShowProfile}
+                        title="Company Profile"
+                    >
+                        <User size={18} />
+                    </button>
+                </div>
                 <h1>TenderExtractPro</h1>
+            </div>
+
+            <div className="sidebar-controls" style={{ padding: '0 24px 16px', borderBottom: '1px solid var(--hairline)' }}>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                    <button 
+                        className={`sort-pill ${sortBy === 'recency' ? 'active' : ''}`}
+                        onClick={() => onSortChange('recency')}
+                    >
+                        <ArrowUpDown size={12} />
+                        Recent
+                    </button>
+                    <button 
+                        className={`sort-pill ${sortBy === 'score' ? 'active' : ''}`}
+                        onClick={() => onSortChange('score')}
+                    >
+                        <Filter size={12} />
+                        Best Match
+                    </button>
+                </div>
             </div>
 
             <div className="upload-zone-wrapper">
                 <UploadZone onUploadComplete={onUploadComplete} />
-                <button 
-                    onClick={onShowProfile}
-                    className={`outline-pill ${showProfile ? 'active' : ''}`}
-                    style={{
-                        width: '100%',
-                        marginTop: '16px',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        gap: '12px',
-                    }}
-                >
-                    <Building size={16} />
-                    Company Profile
-                </button>
             </div>
 
             <div className="job-list">

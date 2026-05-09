@@ -27,6 +27,7 @@
   
   --success: #16a34a;
   --error: #dc2626;
+  --primary: var(--primary-ink);
 
   /* Typography Fallbacks */
   --font-display: 'Inter', system-ui, -apple-system, sans-serif;
@@ -427,18 +428,20 @@ th {
 }
 
 td {
-  padding: 20px 16px;
+  padding: 16px;
   border-bottom: 1px solid var(--hairline);
-  font-size: 15px;
+  font-size: 14px;
   color: var(--text-body);
 }
 
 tbody tr {
-  transition: background-color 0.1s;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
 tbody tr:hover {
-  background-color: var(--canvas-soft);
+  background-color: white;
+  transform: scale(1.002);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.02);
 }
 
 /* Buttons - Pill Primary */
@@ -473,6 +476,90 @@ button.outline-pill {
 button.outline-pill:hover {
   background: var(--canvas-soft);
   border-color: var(--primary-ink);
+}
+
+/* New UI Elements */
+.icon-btn {
+  background: transparent;
+  border: 1px solid var(--hairline);
+  color: var(--text-muted);
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.icon-btn:hover, .icon-btn.active {
+  background: var(--surface-strong);
+  color: var(--text-ink);
+  border-color: var(--hairline-strong);
+}
+
+.sort-pill {
+  background: var(--surface-card);
+  border: 1px solid var(--hairline);
+  padding: 6px 12px;
+  border-radius: 9999px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  transition: all 0.2s;
+}
+
+.sort-pill:hover {
+  border-color: var(--hairline-strong);
+  color: var(--text-ink);
+}
+
+.sort-pill.active {
+  background: var(--primary-ink);
+  color: white;
+  border-color: var(--primary-ink);
+}
+
+.score-badge {
+  background: #fdf2f8;
+  color: #db2777;
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  border: 1px solid #fbcfe8;
+}
+
+.spin {
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+.job-percentage {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--primary-ink);
+}
+
+.empty-sidebar {
+  padding: 48px 24px;
+  text-align: center;
+  color: var(--text-muted-soft);
+  font-size: 14px;
 }
 
 /* Chat Panel - Editorial Conversation */

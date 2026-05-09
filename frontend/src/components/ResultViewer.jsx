@@ -227,7 +227,7 @@ export default function ResultViewer({ job }) {
         {activeTab === 'specs' && <SpecsTable specs={specs} />}
         {activeTab === 'scope' && <ScopePanel scope={scope} />}
         {activeTab === 'qa' && <ChatPanel job={job} />}
-        {activeTab === 'match' && <ScorePanel jobId={job.job_id} />}
+        {activeTab === 'match' && <ScorePanel jobId={job.job_id} initialData={job.match_data} />}
       </div>
     </div>
   );

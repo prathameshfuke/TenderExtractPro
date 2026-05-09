@@ -85,13 +85,31 @@ def run_pipeline_sync(job_id: str, pdf_path: str):
         result = pipeline.run(pdf_path, output_path=output_path,
                               progress_callback=progress_callback)
         
+        # Optional: Auto-score if profile exists
+        match_score = None
+        profile_path = Path("company_profile.json")
+        if profile_path.exists():
+            try:
+                job["message"] = "Ranking against company profile..."
+                from tender_extraction.scoring import score_tender_match
+                profile = json.loads(profile_path.read_text(encoding="utf-8"))
+                score_res = score_tender_match(profile, result)
+                match_score = score_res.get("match_score")
+                job["match_score"] = match_score
+                job["match_data"] = score_res
+            except Exception as e:
+                logger.warning(f"Auto-scoring failed for {job_id}: {e}")
+
         specs = len(result.get("technical_specifications", []))
         deliverables = len(result.get("scope_of_work", {}).get("deliverables", []))
         
         job["progress"] = 100
         job["status"] = "done"
         job["result_path"] = output_path
-        job["message"] = f"Complete - {specs} specs, {deliverables} deliverables extracted"
+        msg = f"Complete - {specs} specs, {deliverables} deliverables"
+        if match_score is not None:
+            msg += f" (Match: {match_score}%)"
+        job["message"] = msg
         job["updated_at"] = time.time()
         
     except Exception as e:

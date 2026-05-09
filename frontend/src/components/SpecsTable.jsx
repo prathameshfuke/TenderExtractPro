@@ -82,18 +82,22 @@ export default function SpecsTable({ specs }) {
             {filteredSpecs.map((spec, i) => {
               const bucket = confidenceBucket(Number(spec.confidence || 0));
               return (
-                <tr key={`${spec.component}-${i}`} onClick={() => setSelectedSpec(spec)}>
-                  <td style={{ fontWeight: 500, color: 'var(--text-main)' }}>{spec.component}</td>
-                  <td style={{ maxWidth: '460px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                <tr 
+                  key={`${spec.component}-${i}`} 
+                  onClick={() => setSelectedSpec(spec)}
+                  style={{ cursor: 'pointer' }}
+                >
+                  <td style={{ fontWeight: 500, color: 'var(--text-ink)' }}>{spec.component}</td>
+                  <td style={{ maxWidth: '460px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', color: 'var(--text-body)' }}>
                     {specsSummary(spec.specs)}
                   </td>
                   <td>
-                    <span className={`badge ${bucket}`}>
-                      {(Number(spec.confidence || 0)).toFixed(2)}
+                    <span className={`badge ${bucket}`} style={{ padding: '2px 8px', fontSize: '10px' }}>
+                      {(Number(spec.confidence || 0) * 100).toFixed(0)}%
                     </span>
                   </td>
-                  <td>{spec.source?.page || '-'}</td>
-                  <td>{spec.source?.clause && spec.source.clause !== 'NOT_FOUND' ? spec.source.clause : '-'}</td>
+                  <td style={{ color: 'var(--text-muted)' }}>{spec.source?.page || '-'}</td>
+                  <td style={{ color: 'var(--text-muted)' }}>{spec.source?.clause && spec.source.clause !== 'NOT_FOUND' ? spec.source.clause : '-'}</td>
                 </tr>
               );
             })}
