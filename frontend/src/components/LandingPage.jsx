@@ -1,10 +1,14 @@
 import React from 'react';
 import { Shield, Zap, Target, ArrowRight, FileText } from 'lucide-react';
+import logo from '../assets/logo.png';
 
 export default function LandingPage({ onGetStarted }) {
   return (
     <div className="landing-page animate-fade">
       <section className="hero-section">
+        <div className="landing-logo animate-scale" style={{ marginBottom: '40px' }}>
+          <img src={logo} alt="TenderExtractPro Logo" style={{ height: '80px', width: 'auto' }} />
+        </div>
         <div className="hero-tag animate-scale">Next-Gen Procurement Intelligence</div>
         <h1 className="hero-title animate-fade">
           Extract precision from <span style={{ color: 'var(--text-muted)' }}>complexity.</span>

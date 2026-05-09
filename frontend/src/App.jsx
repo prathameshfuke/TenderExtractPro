@@ -7,6 +7,7 @@ import ResultViewer from './components/ResultViewer';
 import ProfilePanel from './components/ProfilePanel';
 import UploadZone from './components/UploadZone';
 import LandingPage from './components/LandingPage';
+import Documentation from './components/Documentation';
 
 const api = axios.create({ baseURL: '/api' });
 
@@ -15,6 +16,7 @@ export default function App() {
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [backendOnline, setBackendOnline] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
+  const [showDocs, setShowDocs] = useState(false);
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [hasStarted, setHasStarted] = useState(false);
   const [sortBy, setSortBy] = useState('recency'); // 'recency' or 'score'

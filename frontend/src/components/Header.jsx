@@ -1,5 +1,6 @@
 import React from 'react';
 import { Plus, User, FileText, LayoutGrid, Sun, Moon } from 'lucide-react';
+import logo from '../assets/logo.png';
 
 export default function Header({ 
   onShowProfile, 
@@ -14,8 +15,8 @@ export default function Header({
     <header className="app-header">
       <div className="header-content">
         <div className="header-left" onClick={onLogoClick} style={{ cursor: 'pointer' }}>
-          <div className="logo-icon">
-            <FileText size={20} color={theme === 'dark' ? '#0c0a09' : 'white'} />
+          <div className="logo-container">
+            <img src={logo} alt="Logo" style={{ height: '32px', width: 'auto' }} />
           </div>
           <div className="brand" style={{ letterSpacing: '-0.04em', fontSize: '22px' }}>
             <span className="brand-name" style={{ fontWeight: 800 }}>TenderExtract</span>

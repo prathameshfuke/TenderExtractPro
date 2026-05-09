@@ -310,15 +310,19 @@ button.outline-pill:hover {
   gap: 12px;
 }
 
-.logo-icon {
-  width: 36px;
-  height: 36px;
-  background: var(--primary-ink);
-  border-radius: 10px;
+.logo-container {
   display: flex;
   align-items: center;
   justify-content: center;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+  transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.logo-container:hover {
+  transform: scale(1.05);
+}
+
+.logo-container img {
+  display: block;
 }
 
 .brand {
@@ -1105,8 +1109,214 @@ button.outline-pill:hover {
 
 .sort-pill.active {
   background: var(--primary-ink);
-  color: white;
+  color: var(--canvas);
   border-color: var(--primary-ink);
+}
+
+/* Documentation Component Styles */
+.docs-container {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  background: var(--canvas);
+}
+
+.docs-sidebar {
+  width: 320px;
+  background: var(--surface-card);
+  border-right: 1px solid var(--hairline);
+  padding: 32px 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.docs-back {
+  margin: 0 24px 40px;
+  padding: 12px 16px;
+  background: var(--canvas-soft);
+  border: 1px solid var(--hairline);
+  border-radius: 12px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text-ink);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.docs-back:hover {
+  background: var(--surface-strong);
+  transform: translateX(-4px);
+}
+
+.docs-nav {
+  flex: 1;
+  padding: 0 16px;
+}
+
+.docs-nav-label {
+  font-size: 11px;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--text-muted-soft);
+  margin-bottom: 16px;
+  padding: 0 16px;
+}
+
+.docs-nav-item {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: transparent;
+  border: none;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all 0.2s;
+  text-align: left;
+}
+
+.docs-nav-item:hover {
+  background: var(--canvas-soft);
+  color: var(--text-ink);
+}
+
+.docs-nav-item.active {
+  background: var(--primary-ink);
+  color: var(--canvas);
+}
+
+.docs-nav-item .chevron {
+  margin-left: auto;
+  opacity: 0;
+  transition: all 0.2s;
+}
+
+.docs-nav-item.active .chevron {
+  opacity: 1;
+  transform: translateX(4px);
+}
+
+.docs-footer {
+  padding: 24px 32px;
+  border-top: 1px solid var(--hairline);
+}
+
+.version-tag {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted-soft);
+  margin-bottom: 4px;
+}
+
+.docs-footer p {
+  font-size: 12px;
+  color: var(--text-muted-soft);
+}
+
+.docs-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 80px 100px;
+}
+
+.docs-inner {
+  max-width: 800px;
+}
+
+.doc-page h1 {
+  font-family: var(--font-display);
+  font-size: 48px;
+  font-weight: 800;
+  letter-spacing: -0.04em;
+  color: var(--text-ink);
+  margin-bottom: 24px;
+}
+
+.lead {
+  font-size: 20px;
+  color: var(--text-muted);
+  line-height: 1.6;
+  margin-bottom: 48px;
+}
+
+.doc-section {
+  margin-bottom: 48px;
+}
+
+.doc-section h3 {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 700;
+  color: var(--text-ink);
+  margin-bottom: 16px;
+  letter-spacing: -0.02em;
+}
+
+.doc-section p {
+  font-size: 16px;
+  color: var(--text-body);
+  line-height: 1.8;
+  margin-bottom: 16px;
+}
+
+.doc-list {
+  padding-left: 20px;
+}
+
+.doc-list li {
+  margin-bottom: 12px;
+  color: var(--text-body);
+  font-size: 16px;
+}
+
+.doc-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+  margin-top: 40px;
+}
+
+.doc-card-small {
+  background: var(--surface-card);
+  border: 1px solid var(--hairline);
+  padding: 24px;
+  border-radius: 20px;
+}
+
+.doc-card-small h4 {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 16px 0 8px;
+  color: var(--text-ink);
+}
+
+.doc-card-small p {
+  font-size: 14px;
+  color: var(--text-muted);
+  line-height: 1.5;
+}
+
+.code-block {
+  background: var(--primary-ink);
+  color: #a5f3fc;
+  padding: 16px 24px;
+  border-radius: 12px;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 0;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.2);
 }
 
 .score-badge {
