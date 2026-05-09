@@ -124,19 +124,28 @@ export default function App() {
 
       {!isLanding && (
         <Header 
-          onShowProfile={() => { setShowProfile(true); setSelectedJobId(null); setHasStarted(true); }}
+          onShowProfile={() => { setShowProfile(true); setSelectedJobId(null); setHasStarted(true); setShowDocs(false); }}
           onUploadClick={() => setShowUploadModal(true)}
           onLogoClick={handleLogoClick}
           showProfile={showProfile}
           hasSelectedJob={!!selectedJobId}
           theme={theme}
           onToggleTheme={toggleTheme}
+          onShowDocs={() => { setShowDocs(true); setSelectedJobId(null); setShowProfile(false); setHasStarted(true); }}
+          showDocs={showDocs}
         />
       )}
 
       <main className="main-content">
-        {isLanding ? (
-          <LandingPage onGetStarted={() => setHasStarted(true)} />
+        {isLanding && !showDocs ? (
+          <LandingPage 
+            onGetStarted={() => setHasStarted(true)} 
+            onShowDocs={() => setShowDocs(true)}
+          />
+        ) : showDocs ? (
+          <div style={{ flex: 1, overflowY: 'hidden' }}>
+            <Documentation onBack={() => setShowDocs(false)} />
+          </div>
         ) : showProfile ? (
           <div style={{ flex: 1, overflowY: 'auto' }}>
             <ProfilePanel />

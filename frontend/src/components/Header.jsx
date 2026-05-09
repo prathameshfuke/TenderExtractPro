@@ -9,7 +9,9 @@ export default function Header({
   showProfile, 
   hasSelectedJob,
   theme,
-  onToggleTheme 
+  onToggleTheme,
+  onShowDocs,
+  showDocs
 }) {
   return (
     <header className="app-header">
@@ -26,13 +28,21 @@ export default function Header({
 
         <nav className="header-nav">
           <button 
-            className={`nav-item ${!hasSelectedJob && !showProfile ? 'active' : ''}`}
+            className={`nav-item ${!hasSelectedJob && !showProfile && !showDocs ? 'active' : ''}`}
             onClick={onLogoClick}
           >
             <LayoutGrid size={18} />
             Workspace
           </button>
+          <button 
+            className={`nav-item ${showDocs ? 'active' : ''}`}
+            onClick={onShowDocs}
+          >
+            <BookOpen size={18} />
+            Documentation
+          </button>
         </nav>
+
 
         <div className="header-right">
           <button 
