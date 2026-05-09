@@ -11,7 +11,8 @@ from tender_extraction.ingestion import ingest_document
 from tender_extraction.main import discover_document_topic
 from tender_extraction.retrieval import HybridRetriever, expand_query
 from tender_extraction.schemas import Chunk
-from tender_extraction.table_extraction import extract_tables
+from tender_extraction.table_extraction import extract_docx_tables, extract_image_tables, extract_tables
+from tender_extraction.vision import release_multimodal_model
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +62,16 @@ class DocumentChatSession:
 
         if not loaded_chunks:
             pages = ingest_document(self.file_path)
-            tables = extract_tables(self.file_path) if Path(self.file_path).suffix.lower() == ".pdf" else []
+            suffix = Path(self.file_path).suffix.lower()
+            if suffix == ".pdf":
+                tables = extract_tables(self.file_path, pages=pages)
+            elif suffix == ".docx":
+                tables = extract_docx_tables(self.file_path)
+            elif suffix in {".jpg", ".jpeg", ".png"}:
+                tables = extract_image_tables(self.file_path)
+            else:
+                tables = []
+            release_multimodal_model()
             # Use faster chunking for QA if not pre-computed
             chunks = create_chunks(pages, tables, use_semantic=False)
             topic = discover_document_topic(pages)

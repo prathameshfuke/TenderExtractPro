@@ -46,11 +46,11 @@ A production-grade RAG pipeline for extracting technical specifications and scop
 
 ```mermaid
 graph TD
-    A[Input Document<br>PDF/DOCX/Image] --> B[1. Ingestion<br>pdfplumber + Tesseract OCR fallback]
-    B --> C[2. Table Extraction<br>pdfplumber dual-strategy]
+    A[Input Document<br>PDF/DOCX/Image] --> B[1. Ingestion<br>PyMuPDF + OCR fallback]
+    B --> C[2. Table Extraction<br>pdfplumber + optional Qwen2-VL fallback]
     C --> D[3. Chunking<br>Section-aware hierarchical chunking]
-    D --> E[4. Hybrid Retrieval<br>BM25 + FAISS semantic search]
-    E --> F[5. LLM Extraction<br>Mistral-7B / Phi-3 via llama-cpp-python]
+    D --> E[4. Hybrid Retrieval<br>BM25 + Qdrant + reranking]
+    E --> F[5. LLM Extraction<br>Mistral-7B via llama-cpp-python]
     F --> G[6. Validation<br>rapidfuzz grounding verification]
     G --> H[7. Scoring & Ranking<br>Match evaluation against Company Profile]
     H --> I[Structured JSON Output & Match Score]
@@ -71,9 +71,9 @@ graph TD
 ### 1. Setup Backend
 ```bash
 # Setup environment
-python -m venv venv
-venv\Scripts\activate
-pip install -r requirements.txt
+uv venv
+source .venv/bin/activate
+uv pip install -r requirements.txt
 
 # Run the API server
 uvicorn api.main:app --host 127.0.0.1 --port 8000 --reload
@@ -122,22 +122,28 @@ You can define a **Company Profile** (via the UI or `company_profile.json`) spec
    - **JSON Repair**: Upgraded the JSON repair logic to handle common LLM failure modes like unescaped newlines and markdown fences more robustly.
 
 4. **Environment & Stability Fixes**
-   - **Virtual Environment**: Ensured all dependencies are correctly isolated in the project's local `venv`.
-   - **LLM Fix**: Resolved the `PrefetchVirtualMemory` error on Windows by disabling `mmap` during model loading.
-   - **Dependencies**: Updated `requirements.txt` to include `langchain` and related libraries.
+    - **Virtual Environment**: Ensured all dependencies are correctly isolated in the project's local `venv`.
+    - **LLM Fix**: Resolved the `PrefetchVirtualMemory` error on Windows by disabling `mmap` during model loading.
+    - **Dependencies**: Updated `requirements.txt` to include the retrieval and multimodal runtime libraries used directly by the codebase.
+
+5. **Optional Multimodal Table Recovery**
+   - **Logic**: Conventional PDF extraction stays the default fast path for native tables.
+   - **Fallback**: OCR-heavy or conventionally weak pages can be routed through an optional Qwen2-VL 2B table extractor when `MULTIMODAL_ENABLED=1`.
+   - **Device-aware**: The vision model is released after table extraction so 8 GB-class GPUs can still run the Mistral text model afterward.
 
 ## Project Structure
 
 ```
 TenderExtractPro/
   api/
-    main.py             -- FastAPI server with extraction and scoring endpoints
+    main.py             -- FastAPI server with extraction, Q&A, and scoring endpoints
   frontend/             -- React + Vite User Interface
   tender_extraction/
     config.py           -- Centralized configuration
     schemas.py          -- Pydantic v2 models for structured output
     scoring.py          -- LLM matching logic for company profile
     extraction.py       -- LLM-powered specification extraction
+    vision.py           -- Optional Qwen2-VL-based table recovery for difficult pages
     main.py             -- Pipeline orchestration and CLI
   company_profile.json  -- Active company profile configurations
   dataset/              -- Real tender PDF files for testing
@@ -150,11 +156,12 @@ All tunable parameters are centralized in `tender_extraction/config.py`. Key set
 
 | Parameter | Default | Description |
 |---|---|---|
-| `chunking.max_chunk_tokens` | 400 | Maximum tokens per text chunk |
-| `retrieval.bm25_weight` | 0.4 | BM25 weight in score fusion |
-| `retrieval.embedding_weight` | 0.6 | Embedding weight in score fusion |
-| `llm.temperature` | 0.1 | LLM generation temperature |
+| `chunking.max_chunk_tokens` | 500 | Maximum tokens per text chunk |
+| `retrieval.bm25_weight` | 0.35 | BM25 weight in score fusion |
+| `retrieval.embedding_weight` | 0.65 | Embedding weight in score fusion |
+| `llm.temperature` | 0.05 | LLM generation temperature |
 | `validation.min_grounding_ratio` | 0.40 | Minimum grounding score to accept a spec |
+| `multimodal.enabled` | `False` | Enable Qwen2-VL table fallback for difficult pages |
 
 ## Contributors
 

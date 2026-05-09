@@ -31,11 +31,6 @@ logger = logging.getLogger(__name__)
 _llm_instance = None
 _llm_lock = threading.Lock()
 
-# Chat template tags for Phi-3
-_SYS_OPEN = "<|system|>"
-_TAG_END = "<|end|>"
-_USER_OPEN = "<|user|>"
-_ASST_OPEN = "<|assistant|>"
 _EOS = "</s>"
 
 _SPEC_SYSTEM = (
@@ -136,20 +131,24 @@ def _count_tokens(text: str) -> int:
 
 
 _PROMPT_OVERHEAD_TOKENS = 750
-_CONTEXT_BUDGET = config.llm.n_ctx - config.llm.max_tokens - _PROMPT_OVERHEAD_TOKENS
+
+
+def _context_budget() -> int:
+    return max(512, config.llm.n_ctx - config.llm.max_tokens - _PROMPT_OVERHEAD_TOKENS)
 
 
 def _split_into_batches(
     retrieved_chunks: List[Dict[str, Any]],
-    budget: int = _CONTEXT_BUDGET,
+    budget: Optional[int] = None,
 ) -> List[List[Dict[str, Any]]]:
+    batch_budget = budget if budget is not None else _context_budget()
     batches: List[List[Dict[str, Any]]] = []
     current_batch: List[Dict[str, Any]] = []
     current_tokens = 0
 
     for item in retrieved_chunks:
         chunk_tokens = _count_tokens(item["chunk"].text)
-        if current_tokens + chunk_tokens > budget and current_batch:
+        if current_tokens + chunk_tokens > batch_budget and current_batch:
             batches.append(current_batch)
             current_batch = [item]
             current_tokens = chunk_tokens
@@ -212,10 +211,22 @@ def load_model():
         if not Path(model_path).exists():
             raise RuntimeError(f"LLM model not found at: {model_path}")
 
+        supports_gpu_offload = bool(llama_cpp.llama_supports_gpu_offload())
+        if config.llm.require_gpu and not supports_gpu_offload:
+            logger.warning(
+                "llama-cpp-python was loaded without GPU offload support; "
+                "the text model will run on CPU until a CUDA-enabled build is installed."
+            )
+        n_gpu_layers = config.llm.n_gpu_layers if supports_gpu_offload else 0
+        logger.info(
+            "Loading text model %s with %s",
+            Path(model_path).name,
+            "GPU offload" if n_gpu_layers != 0 else "CPU-only inference",
+        )
         _llm_instance = Llama(
             model_path=model_path,
             n_ctx=config.llm.n_ctx,
-            n_gpu_layers=config.llm.n_gpu_layers,
+            n_gpu_layers=n_gpu_layers,
             n_threads=config.llm.n_threads,
             use_mmap=False,  # Fix for 'PrefetchVirtualMemory unavailable' on Windows
             verbose=False
@@ -339,16 +350,25 @@ def extract_scope_of_work(retrieved_chunks: List[Dict[str, Any]], topic: str = "
 def build_spec_prompt(context: str, topic: str = "") -> str:
     topic_hint = f"Tender Topic: {topic}\n\n" if topic else ""
     user_msg = topic_hint + _SPEC_INSTRUCTIONS.replace("{few_shot}", _SPEC_FEW_SHOT).replace("{context}", context)
-    return f"{_SYS_OPEN}\n{_SPEC_SYSTEM}{_TAG_END}\n{_USER_OPEN}\n{user_msg}{_TAG_END}\n{_ASST_OPEN}"
+    return _build_mistral_prompt(_SPEC_SYSTEM, user_msg)
 
 def build_scope_prompt(context: str, topic: str = "") -> str:
     topic_hint = f"Tender Topic: {topic}\n\n" if topic else ""
     user_msg = topic_hint + _SCOPE_INSTRUCTIONS.replace("{few_shot}", _SCOPE_FEW_SHOT).replace("{context}", context)
-    return f"{_SYS_OPEN}\n{_SCOPE_SYSTEM}{_TAG_END}\n{_USER_OPEN}\n{user_msg}{_TAG_END}\n{_ASST_OPEN}"
+    return _build_mistral_prompt(_SCOPE_SYSTEM, user_msg)
 
 def build_qa_prompt(question: str, context: str, topic: str = "") -> str:
     user_msg = _QA_INSTRUCTIONS.replace("{question}", question).replace("{topic}", topic or "N/A").replace("{context}", context)
-    return f"{_SYS_OPEN}\n{_QA_SYSTEM}{_TAG_END}\n{_USER_OPEN}\n{user_msg}{_TAG_END}\n{_ASST_OPEN}"
+    return _build_mistral_prompt(_QA_SYSTEM, user_msg)
+
+
+def _build_mistral_prompt(system_message: str, user_message: str) -> str:
+    """
+    The configured default model is Mistral-7B-Instruct, so prompts must use
+    the Mistral instruction format rather than Phi-style role tags.
+    """
+    merged_message = f"{system_message}\n\n{user_message}".strip()
+    return f"<s>[INST] {merged_message} [/INST]"
 
 def answer_question(retrieved_chunks: List[Dict[str, Any]], question: str, topic: str = "") -> Dict[str, Any]:
     if not retrieved_chunks: return {"answer": "NOT_FOUND", "citations": [], "confidence": "LOW"}
@@ -392,7 +412,14 @@ def _call_llm(llm, prompt: str, msg: str = "LLM generating") -> str:
         try:
             with _llm_lock:
                 with LLMProgressIndicator(msg):
-                    res = llm(prompt, max_tokens=config.llm.max_tokens, temperature=config.llm.temperature, stop=[_TAG_END])
+                    res = llm(
+                        prompt,
+                        max_tokens=config.llm.max_tokens,
+                        temperature=config.llm.temperature,
+                        top_p=config.llm.top_p,
+                        repeat_penalty=config.llm.repeat_penalty,
+                        stop=[_EOS],
+                    )
             return res["choices"][0]["text"].strip()
         except Exception as e:
             if attempt == config.llm.max_retries: raise
