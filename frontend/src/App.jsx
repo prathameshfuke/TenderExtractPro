@@ -132,35 +132,36 @@ export default function App() {
           theme={theme}
           onToggleTheme={toggleTheme}
           onShowDocs={() => { setShowDocs(true); setSelectedJobId(null); setShowProfile(false); setHasStarted(true); }}
-          showDocs={showDocs}
-        />
-      )}
+          const isLanding = !hasStarted && jobs.length === 0;
 
-      <main className="main-content">
-        {isLanding && !showDocs ? (
-          <LandingPage 
-            onGetStarted={() => setHasStarted(true)} 
-            onShowDocs={() => setShowDocs(true)}
-          />
-        ) : showDocs ? (
-          <div style={{ flex: 1, overflowY: 'hidden' }}>
-            <Documentation onBack={() => setShowDocs(false)} />
-          </div>
-        ) : showProfile ? (
-          <div style={{ flex: 1, overflowY: 'auto' }}>
-            <ProfilePanel />
-          </div>
-        ) : !selectedJobId ? (
-          <Dashboard 
-            jobs={processedJobs}
-            onSelectJob={(job) => setSelectedJobId(job.job_id)}
-            sortBy={sortBy}
-            onSortChange={setSortBy}
-          />
-        ) : (
-          <ResultViewer job={selectedJob} onBack={handleLogoClick} />
-        )}
-      </main>
+          return (
+            <div className="app-container">
+          ...
+              <main className="main-content">
+                {isLanding && !showDocs ? (
+                  <LandingPage 
+                    onGetStarted={() => setHasStarted(true)} 
+                    onShowDocs={() => setShowDocs(true)}
+                  />
+                ) : showDocs ? (
+                  <div style={{ flex: 1 }}>
+                    <Documentation onBack={() => setShowDocs(false)} />
+                  </div>
+                ) : showProfile ? (
+                  <div style={{ flex: 1, overflowY: 'auto' }}>
+                    <ProfilePanel />
+                  </div>
+                ) : (!selectedJobId || jobs.length === 0) ? (
+                  <Dashboard 
+                    jobs={processedJobs}
+                    onSelectJob={(job) => setSelectedJobId(job.job_id)}
+                    sortBy={sortBy}
+                    onSortChange={setSortBy}
+                  />
+                ) : (
+                  <ResultViewer job={selectedJob} onBack={handleLogoClick} />
+                )}
+              </main>
 
       {showUploadModal && (
         <div className="modal-overlay" onClick={() => setShowUploadModal(false)}>

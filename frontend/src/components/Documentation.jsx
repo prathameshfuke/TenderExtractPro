@@ -13,7 +13,7 @@ const DOCS_PAGES = [
         
         <div className="doc-section">
           <h3>Architectural Philosophy</h3>
-          <p>Unlike standard PDF parsers, our system employs a <strong>Modular Intelligence Pipeline</strong>. We treat every tender as a high-dimensional data structure rather than just text. The system follows a four-stage process:</p>
+          <p>Unlike standard PDF parsers, our system employs a <strong>Modular Intelligence Pipeline</strong>. We treat every tender as a high-dimensional data structure rather than just text. The system follows a sequence designed for maximum data integrity:</p>
           <ul className="doc-list">
             <li><strong>Ingestion:</strong> Multi-layer parsing including OCR and table structure recovery.</li>
             <li><strong>Contextualization:</strong> Semantic chunking and vector-based indexing.</li>
@@ -53,10 +53,10 @@ const DOCS_PAGES = [
 
         <div className="doc-section">
           <h3>Stage 2: Hybrid Retrieval</h3>
-          <p>We use a dual-retrieval strategy:</p>
-          <div className="code-block">
+          <p>We use a dual-retrieval strategy to ensure technical IDs are never missed:</p>
+          <div className="code-block" style={{ background: '#0c0a09', color: '#22d3ee' }}>
             <Terminal size={14} />
-            <span>Retrieval = (0.7 * Semantic_Sim) + (0.3 * Keyword_Match)</span>
+            <span>Score = (0.7 * Vector_Sim) + (0.3 * BM25_Keyword)</span>
           </div>
           <p>This ensures that both conceptual matches and specific technical IDs (like "ASTM A36") are captured during the analysis phase.</p>
         </div>
@@ -64,6 +64,37 @@ const DOCS_PAGES = [
         <div className="doc-section">
           <h3>Stage 3: LLM Reasoning</h3>
           <p>We utilize an 8-bit quantized Mistral-7B model with a 20-year "Procurement Expert" persona. The model performs "Chain-of-Thought" reasoning before outputting final JSON, ensuring it evaluates the context of a specification before committing it as a data point.</p>
+        </div>
+      </div>
+    )
+  },
+  {
+    id: 'pipeline',
+    title: 'Pipeline Logic',
+    icon: <Terminal size={20} />,
+    content: (
+      <div className="doc-page">
+        <h1>Pipeline Orchestration</h1>
+        <p className="lead">Understand the lifecycle of a document from upload to final ranking.</p>
+
+        <div className="doc-section">
+          <h3>The Queuing System</h3>
+          <p>To ensure system stability, all uploads are handled by a <strong>Sequential Job Worker</strong>. This prevents CPU and VRAM spikes by processing one document at a time while keeping others in a 'Queued' state.</p>
+        </div>
+
+        <div className="doc-section">
+          <h3>Data ValidationPass</h3>
+          <p>Before any data is presented in the UI, it undergoes a JSON validation pass against our strict procurement schemas. If an LLM response is malformed, our <strong>Auto-Repair Logic</strong> attempts to fix brackets or quote nesting without altering the technical values.</p>
+        </div>
+
+        <div className="doc-section">
+          <h3>Schema Integrity</h3>
+          <p>Our extraction target follows the <code>ProcurementStandard-v4</code> schema, focusing on:</p>
+          <ul className="doc-list">
+            <li><strong>Technical Specs:</strong> Verbatim values and units.</li>
+            <li><strong>Scope:</strong> Deliverables, exclusions, and locations.</li>
+            <li><strong>Metadata:</strong> Pages, clauses, and confidence intervals.</li>
+          </ul>
         </div>
       </div>
     )
@@ -88,34 +119,8 @@ const DOCS_PAGES = [
         </div>
 
         <div className="doc-section">
-          <h3>Cost Feasibility</h3>
-          <p>The system automatically flags tenders where the estimated value or financial requirements exceed your stated "Maximum Project Valuation," helping you avoid high-risk or under-qualified bids.</p>
-        </div>
-      </div>
-    )
-  },
-  {
-    id: 'guide',
-    title: 'User Guide',
-    icon: <FileText size={20} />,
-    content: (
-      <div className="doc-page">
-        <h1>User Guide</h1>
-        <p className="lead">How to get the most out of TenderExtractPro.</p>
-
-        <div className="doc-section">
-          <h3>1. Optimizing your Profile</h3>
-          <p>The accuracy of the Ranking Engine depends on a detailed Company Profile. Be specific with "Core Capabilities"—instead of "Construction," use "High-Rise Commercial Concrete Construction." This allows the LLM to identify niche alignment.</p>
-        </div>
-
-        <div className="doc-section">
-          <h3>2. The "Ask Document" Feature</h3>
-          <p>In the detail view, use the chat panel to query specific details not captured in the summary. For example: <em>"What is the penalty for late delivery in Section 5.4?"</em> The system will perform a targeted retrieval to answer your query with source citations.</p>
-        </div>
-
-        <div className="doc-section">
-          <h3>3. Understanding Confidence Scores</h3>
-          <p>Our extraction assigns a confidence percentage to every spec. Scores below 70% should be manually verified using the "Evidence Match" drawer to ensure the model hasn't misinterpreted a complex clause.</p>
+          <h3>Profile Grounding</h3>
+          <p>The ranking isn't just a number—it's backed by <strong>Strategic Reasoning</strong>. The LLM explains <em>why</em> it assigned a specific score, highlighting mismatches in capabilities or budget thresholds.</p>
         </div>
       </div>
     )

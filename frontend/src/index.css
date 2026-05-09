@@ -170,15 +170,21 @@ button.outline-pill:hover {
 }
 
 /* Landing Page Components */
+.landing-page {
+  width: 100%;
+  padding-bottom: 100px;
+}
+
 .hero-section {
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   text-align: center;
-  padding: 120px 40px;
-  max-width: 900px;
+  padding: 100px 40px;
+  max-width: 1100px;
   margin: 0 auto;
+  min-height: calc(100vh - 100px);
 }
 
 .hero-tag {
@@ -274,17 +280,15 @@ button.outline-pill:hover {
 .app-container {
   display: flex;
   flex-direction: column;
-  width: 100vw;
-  height: 100vh;
-  overflow: hidden;
-  z-index: 1;
+  width: 100%;
+  min-height: 100vh;
 }
 
 /* Header Styles */
 .app-header {
   height: 72px;
   background: var(--surface-card);
-  opacity: 0.95;
+  opacity: 0.98;
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--hairline);
   display: flex;
@@ -402,8 +406,7 @@ button.outline-pill:hover {
 /* Dashboard Styles */
 .dashboard-container {
   flex: 1;
-  overflow-y: auto;
-  padding: 60px 40px;
+  padding: 80px 40px 120px;
   max-width: 1400px;
   margin: 0 auto;
   width: 100%;
@@ -504,11 +507,6 @@ button.outline-pill:hover {
   background: var(--surface-card);
   color: var(--text-ink);
   box-shadow: 0 2px 8px rgba(0,0,0,0.05);
-}
-
-/* Landing Page Padding Fix */
-.landing-page {
-  padding-top: 60px;
 }
 
 .jobs-grid {
@@ -834,7 +832,7 @@ button.outline-pill:hover {
   display: flex;
   flex-direction: column;
   background: transparent;
-  position: relative;
+  width: 100%;
 }
 
 .empty-state {
@@ -1118,7 +1116,7 @@ button.outline-pill:hover {
 .docs-container {
   display: flex;
   width: 100%;
-  height: 100%;
+  min-height: calc(100vh - 72px);
   background: var(--canvas);
 }
 
@@ -1129,6 +1127,9 @@ button.outline-pill:hover {
   padding: 32px 0;
   display: flex;
   flex-direction: column;
+  position: sticky;
+  top: 72px;
+  height: calc(100vh - 72px);
 }
 
 .docs-back {
@@ -1225,7 +1226,6 @@ button.outline-pill:hover {
 
 .docs-content {
   flex: 1;
-  overflow-y: auto;
   padding: 80px 100px;
 }
 
@@ -1308,7 +1308,7 @@ button.outline-pill:hover {
 
 .code-block {
   background: var(--primary-ink);
-  color: #a5f3fc;
+  color: #a5f3fc; /* Cyan-200 for high visibility on dark */
   padding: 16px 24px;
   border-radius: 12px;
   font-family: var(--font-mono);
@@ -1318,6 +1318,12 @@ button.outline-pill:hover {
   gap: 12px;
   margin: 24px 0;
   box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+  border: 1px solid rgba(255,255,255,0.1);
+}
+
+[data-theme='dark'] .code-block {
+  background: var(--surface-strong);
+  color: #22d3ee; /* Cyan-400 */
 }
 
 .score-badge {
