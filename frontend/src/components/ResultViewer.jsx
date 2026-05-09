@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { XCircle } from 'lucide-react';
+import { XCircle, ArrowLeft, Download, Share2 } from 'lucide-react';
 import SpecsTable from './SpecsTable';
 import ScopePanel from './ScopePanel';
 import ChatPanel from './ChatPanel';
@@ -77,7 +77,7 @@ function normalizeScope(scope) {
   };
 }
 
-export default function ResultViewer({ job }) {
+export default function ResultViewer({ job, onBack }) {
   const [result, setResult] = useState(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('specs');
@@ -130,24 +130,9 @@ export default function ResultViewer({ job }) {
     [result],
   );
 
-  const highConfidenceCount = useMemo(
-    () => specs.filter((s) => s.confidence >= 0.8).length,
-    [specs],
-  );
-
   if (!job) return null;
 
   const progress = Number(job.progress || 0);
-  const startedAt = Number(job.started_at || 0);
-  const now = Number(job.updated_at || job.started_at || 0);
-  let etaText = '';
-  if (job.status === 'running' && startedAt > 0 && now >= startedAt && progress > 0 && progress < 100) {
-    const elapsed = Math.max(1, now - startedAt);
-    const rate = progress / elapsed;
-    if (rate > 0.05) {
-      etaText = `ETA ${Math.ceil((100 - progress) / rate)}s`;
-    }
-  }
 
   if (job.status !== 'done') {
     return (
@@ -158,6 +143,7 @@ export default function ResultViewer({ job }) {
               <XCircle size={48} className="upload-icon mx-auto mb-4" color="var(--status-red)" />
               <h3>Extraction failed</h3>
               <p className="job-message" style={{ marginTop: '10px' }}>{job.message}</p>
+              <button className="outline-pill" onClick={onBack} style={{ marginTop: '24px' }}>Back to Workspace</button>
             </>
           ) : (
             <>
@@ -169,9 +155,7 @@ export default function ResultViewer({ job }) {
               <div className="progress-track" style={{ marginTop: '20px', width: '420px', height: '8px' }}>
                 <div className="progress-fill" style={{ width: `${progress}%`, transition: 'width 0.5s ease' }} />
               </div>
-              <div style={{ marginTop: '10px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)', fontSize: '0.82rem' }}>
-                {progress}% {etaText ? `- ${etaText}` : ''}
-              </div>
+              <button className="outline-pill" onClick={onBack} style={{ marginTop: '32px' }}>Minimize Analysis</button>
             </>
           )}
         </div>
@@ -184,26 +168,38 @@ export default function ResultViewer({ job }) {
   if (!result) return <div className="empty-state">No result payload found.</div>;
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', height: '100%' }}>
-      <div className="result-header">
-        <div className="result-title">
-          <h2>{job.filename}</h2>
-          <span className="badge done" style={{ marginTop: '12px', display: 'inline-block' }}>
-            Analysis Complete
-          </span>
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      <div className="result-header" style={{ padding: '32px 40px', background: 'white', borderBottom: '1px solid var(--hairline)' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '24px' }}>
+           <button className="icon-btn" onClick={onBack} title="Back to Workspace">
+             <ArrowLeft size={20} />
+           </button>
+           <div className="result-title">
+             <h2 style={{ fontSize: '28px', fontWeight: 300, marginBottom: '4px', letterSpacing: '-0.02em' }}>{job.filename}</h2>
+             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span className="badge done">Analysis Complete</span>
+                <span style={{ fontSize: '12px', color: 'var(--text-muted-soft)' }}>
+                  Analyzed {new Date(job.created_at * 1000).toLocaleDateString()}
+                </span>
+             </div>
+           </div>
         </div>
-        <div className="result-stats">
-          <div className="result-stats-item">
-            <span>Specifications</span>
-            <strong>{specs.length}</strong>
+        
+        <div style={{ display: 'flex', alignItems: 'center', gap: '32px' }}>
+          <div className="result-stats">
+            <div className="result-stats-item">
+              <span>Specifications</span>
+              <strong>{specs.length}</strong>
+            </div>
+            <div className="result-stats-item">
+              <span>Deliverables</span>
+              <strong>{scope.deliverables.length}</strong>
+            </div>
           </div>
-          <div className="result-stats-item">
-            <span>Deliverables</span>
-            <strong>{scope.deliverables.length}</strong>
-          </div>
-          <div className="result-stats-item">
-            <span>Accuracy</span>
-            <strong>{Math.round(Number(result?.accuracy_score || 0))}%</strong>
+          <div className="v-divider"></div>
+          <div style={{ display: 'flex', gap: '8px' }}>
+             <button className="icon-btn" title="Download JSON"><Download size={18} /></button>
+             <button className="icon-btn" title="Share Analysis"><Share2 size={18} /></button>
           </div>
         </div>
       </div>
@@ -223,7 +219,7 @@ export default function ResultViewer({ job }) {
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow: 'hidden' }}>
+      <div style={{ flex: 1, overflow: 'hidden', background: 'var(--canvas)' }}>
         {activeTab === 'specs' && <SpecsTable specs={specs} />}
         {activeTab === 'scope' && <ScopePanel scope={scope} />}
         {activeTab === 'qa' && <ChatPanel job={job} />}

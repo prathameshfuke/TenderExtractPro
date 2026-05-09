@@ -1,0 +1,101 @@
+import React from 'react';
+import { ArrowUpDown, Filter, Search, FileText, Clock, Award, ChevronRight } from 'lucide-react';
+
+export default function Dashboard({ jobs, onSelectJob, sortBy, onSortChange }) {
+  return (
+    <div className="dashboard-container">
+      <div className="dashboard-header">
+        <div>
+          <h1>Your Workspace</h1>
+          <p>Manage and analyze your tender documents</p>
+        </div>
+        
+        <div className="dashboard-controls">
+          <div className="search-box">
+            <Search size={16} />
+            <input type="text" placeholder="Search tenders..." />
+          </div>
+          
+          <div className="v-divider"></div>
+          
+          <div className="sort-group">
+            <button 
+              className={`sort-btn ${sortBy === 'recency' ? 'active' : ''}`}
+              onClick={() => onSortChange('recency')}
+            >
+              <Clock size={14} />
+              Recent
+            </button>
+            <button 
+              className={`sort-btn ${sortBy === 'score' ? 'active' : ''}`}
+              onClick={() => onSortChange('score')}
+            >
+              <Award size={14} />
+              Match
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <div className="jobs-grid">
+        {jobs.length === 0 ? (
+          <div className="empty-grid-state">
+            <div className="empty-icon">
+              <FileText size={48} />
+            </div>
+            <h3>No tenders analyzed yet</h3>
+            <p>Upload a PDF document to start the extraction pipeline.</p>
+          </div>
+        ) : (
+          jobs.map((job) => (
+            <div 
+              key={job.job_id} 
+              className={`dashboard-card ${job.status}`}
+              onClick={() => onSelectJob(job)}
+            >
+              <div className="card-header">
+                <div className="card-type-icon">
+                  <FileText size={20} />
+                </div>
+                <div className={`status-badge ${job.status}`}>
+                  {job.status}
+                </div>
+              </div>
+              
+              <div className="card-body">
+                <h3 className="card-title">{job.filename}</h3>
+                <p className="card-msg">{job.message}</p>
+                
+                {job.status === 'running' && (
+                  <div className="card-progress">
+                    <div className="progress-bar">
+                      <div className="progress-fill" style={{ width: `${job.progress}%` }}></div>
+                    </div>
+                    <span className="progress-text">{job.progress}%</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="card-footer">
+                {job.match_score !== undefined && job.status === 'done' ? (
+                  <div className="card-score">
+                    <Award size={14} />
+                    <span>{job.match_score}% Match</span>
+                  </div>
+                ) : (
+                  <div className="card-date">
+                     {new Date(job.created_at * 1000).toLocaleDateString()}
+                  </div>
+                )}
+                <div className="card-action">
+                  <span>View Details</span>
+                  <ChevronRight size={14} />
+                </div>
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}

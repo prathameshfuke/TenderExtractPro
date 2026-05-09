@@ -1,25 +1,20 @@
 import { useEffect, useMemo, useState } from 'react';
 import axios from 'axios';
-import { FileText } from 'lucide-react';
-import Sidebar from './components/Sidebar';
+import { FileText, X } from 'lucide-react';
+import Header from './components/Header';
+import Dashboard from './components/Dashboard';
 import ResultViewer from './components/ResultViewer';
 import ProfilePanel from './components/ProfilePanel';
+import UploadZone from './components/UploadZone';
 
 const api = axios.create({ baseURL: '/api' });
-
-function sortJobsByRecency(items) {
-  return [...items].sort((a, b) => {
-    const ta = Number(a?.created_at || 0);
-    const tb = Number(b?.created_at || 0);
-    return tb - ta;
-  });
-}
 
 export default function App() {
   const [jobs, setJobs] = useState([]);
   const [selectedJobId, setSelectedJobId] = useState(null);
   const [backendOnline, setBackendOnline] = useState(true);
   const [showProfile, setShowProfile] = useState(false);
+  const [showUploadModal, setShowUploadModal] = useState(false);
   const [sortBy, setSortBy] = useState('recency'); // 'recency' or 'score'
 
   const processedJobs = useMemo(() => {
@@ -47,14 +42,6 @@ export default function App() {
         setBackendOnline(true);
         const incoming = Array.isArray(res.data) ? res.data : [];
         setJobs(incoming);
-        
-        if (!selectedJobId && incoming.length > 0) {
-          // If sorting by score, we might want the highest score first
-          const firstJob = sortBy === 'score' 
-            ? [...incoming].sort((a,b) => (b.match_score || 0) - (a.match_score || 0))[0]
-            : [...incoming].sort((a,b) => (b.created_at || 0) - (a.created_at || 0))[0];
-          setSelectedJobId(firstJob.job_id);
-        }
       } catch (err) {
         setBackendOnline(false);
         console.error('Failed to load jobs', err);
@@ -87,6 +74,12 @@ export default function App() {
     setJobs((prev) => [newJob, ...prev]);
     setSelectedJobId(newJob.job_id);
     setShowProfile(false);
+    setShowUploadModal(false);
+  };
+
+  const handleLogoClick = () => {
+    setSelectedJobId(null);
+    setShowProfile(false);
   };
 
   return (
@@ -102,7 +95,7 @@ export default function App() {
           position: 'fixed',
           top: 12,
           right: 12,
-          zIndex: 999,
+          zIndex: 9999,
           background: 'var(--error)',
           color: 'white',
           padding: '10px 16px',
@@ -115,40 +108,45 @@ export default function App() {
         </div>
       )}
 
-      <Sidebar
-        jobs={processedJobs}
-        selectedJob={selectedJob}
+      <Header 
+        onShowProfile={() => { setShowProfile(true); setSelectedJobId(null); }}
+        onUploadClick={() => setShowUploadModal(true)}
+        onLogoClick={handleLogoClick}
         showProfile={showProfile}
-        onSelectJob={(job) => { setSelectedJobId(job.job_id); setShowProfile(false); }}
-        onShowProfile={() => setShowProfile(true)}
-        onUploadComplete={handleUploadComplete}
-        sortBy={sortBy}
-        onSortChange={setSortBy}
+        hasSelectedJob={!!selectedJobId}
       />
 
       <main className="main-content">
         {showProfile ? (
-          <ProfilePanel />
-        ) : !selectedJob ? (
-          <div className="empty-state">
-            <h1>TenderExtractPro</h1>
-            <p>
-              An editorial approach to tender extraction. 
-              Upload a document to begin the deep-analysis pipeline.
-            </p>
-            <div style={{ marginTop: '32px' }}>
-              <button 
-                className="outline-pill"
-                onClick={() => document.getElementById('sidebar-upload-trigger')?.click()}
-              >
-                Get Started
-              </button>
-            </div>
+          <div style={{ flex: 1, overflowY: 'auto' }}>
+            <ProfilePanel />
           </div>
+        ) : !selectedJobId ? (
+          <Dashboard 
+            jobs={processedJobs}
+            onSelectJob={(job) => setSelectedJobId(job.job_id)}
+            sortBy={sortBy}
+            onSortChange={setSortBy}
+          />
         ) : (
-          <ResultViewer job={selectedJob} />
+          <ResultViewer job={selectedJob} onBack={handleLogoClick} />
         )}
       </main>
+
+      {showUploadModal && (
+        <div className="modal-overlay" onClick={() => setShowUploadModal(false)}>
+          <div className="modal-content" onClick={e => e.stopPropagation()}>
+            <button className="modal-close" onClick={() => setShowUploadModal(false)}>
+              <X size={20} />
+            </button>
+            <div style={{ textAlign: 'center', marginBottom: '32px' }}>
+              <h2 style={{ fontSize: '24px', fontWeight: 300, marginBottom: '8px' }}>Analyze New Tender</h2>
+              <p style={{ color: 'var(--text-muted)' }}>Upload a PDF to begin the analysis</p>
+            </div>
+            <UploadZone onUploadComplete={handleUploadComplete} />
+          </div>
+        </div>
+      )}
     </div>
   );
 }
