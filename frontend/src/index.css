@@ -564,6 +564,7 @@ button.outline-pill:hover {
 .status-badge.done { background: #eefdf5; color: var(--success); }
 .status-badge.running { background: #fffbeb; color: #d97706; }
 .status-badge.error { background: #fef2f2; color: var(--error); }
+.status-badge.queued { background: var(--canvas-soft); color: var(--text-muted); border: 1px solid var(--hairline); }
 
 .card-title {
   font-family: var(--font-display);

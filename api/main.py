@@ -2,9 +2,10 @@ from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import asyncio, uuid, json, os, threading
+import asyncio, uuid, json, os, threading, queue
 import time
 from pathlib import Path
+import logging
 
 app = FastAPI()
 app.add_middleware(CORSMiddleware, 
@@ -13,9 +14,30 @@ app.add_middleware(CORSMiddleware,
 
 jobs = {}  # job_id -> {status, progress, message, filename, result_path}
 chat_sessions = {}
+job_queue = queue.Queue()
 UPLOAD_DIR = Path("uploads"); UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR = Path("outputs"); OUTPUT_DIR.mkdir(exist_ok=True)
 SUPPORTED_UPLOAD_SUFFIXES = {".pdf", ".docx", ".jpg", ".jpeg", ".png"}
+
+logger = logging.getLogger("uvicorn")
+
+def worker():
+    """Background worker to process jobs sequentially."""
+    while True:
+        try:
+            job_data = job_queue.get()
+            if job_data is None:
+                break
+            job_id, file_path = job_data
+            run_pipeline_sync(job_id, file_path)
+        except Exception as e:
+            logger.error(f"Worker error: {e}")
+        finally:
+            job_queue.task_done()
+
+# Start the worker thread
+worker_thread = threading.Thread(target=worker, daemon=True)
+worker_thread.start()
 
 
 class AskRequest(BaseModel):
@@ -40,17 +62,15 @@ async def upload(file: UploadFile = File(...)):
     file_path.write_bytes(content)
     jobs[job_id] = {
         "status": "queued", "progress": 0,
-        "message": "Queued", "filename": file.filename,
+        "message": "Waiting in queue...", "filename": file.filename,
         "job_id": job_id, "result_path": None,
         "created_at": now, "started_at": None, "updated_at": now,
         "file_path": str(file_path),
     }
-    thread = threading.Thread(
-        target=run_pipeline_sync, 
-        args=(job_id, str(file_path)),
-        daemon=True
-    )
-    thread.start()
+    
+    # Add to sequential queue
+    job_queue.put((job_id, str(file_path)))
+    
     return {"job_id": job_id, "filename": file.filename}
 
 def run_pipeline_sync(job_id: str, file_path: str):

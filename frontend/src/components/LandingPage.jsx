@@ -2,7 +2,7 @@ import React from 'react';
 import { Shield, Zap, Target, ArrowRight, FileText } from 'lucide-react';
 import logo from '../assets/logo.png';
 
-export default function LandingPage({ onGetStarted }) {
+export default function LandingPage({ onGetStarted, onShowDocs }) {
   return (
     <div className="landing-page animate-fade">
       <section className="hero-section">
@@ -23,7 +23,7 @@ export default function LandingPage({ onGetStarted }) {
             Get Started
             <ArrowRight size={18} />
           </button>
-          <button className="outline-pill">
+          <button className="outline-pill" onClick={onShowDocs}>
             Documentation
           </button>
         </div>
