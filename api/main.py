@@ -1,19 +1,19 @@
 from fastapi import FastAPI, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-import asyncio, uuid, json, os, threading, queue
+import uuid, json, os, threading, queue
 import time
 from pathlib import Path
 import logging
 
 app = FastAPI()
-app.add_middleware(CORSMiddleware, 
+app.add_middleware(CORSMiddleware,
     allow_origins=["http://localhost:5173"],
     allow_methods=["*"], allow_headers=["*"])
 
-jobs = {}  # job_id -> {status, progress, message, filename, result_path}
-chat_sessions = {}
+jobs = {}          # job_id -> job dict (includes chat_history list)
+chat_sessions = {} # job_id -> DocumentChatSession
+chat_session_locks: dict = {}  # job_id -> threading.Lock  (prevents concurrent init)
 job_queue = queue.Queue()
 UPLOAD_DIR = Path("uploads"); UPLOAD_DIR.mkdir(exist_ok=True)
 OUTPUT_DIR = Path("outputs"); OUTPUT_DIR.mkdir(exist_ok=True)
@@ -21,34 +21,42 @@ SUPPORTED_UPLOAD_SUFFIXES = {".pdf", ".docx", ".jpg", ".jpeg", ".png"}
 
 logger = logging.getLogger("uvicorn")
 
-def worker():
-    """Background worker to process jobs sequentially."""
+
+# ── Background worker ──────────────────────────────────────────────────────
+
+def _worker():
+    """Process extraction jobs sequentially in a daemon thread."""
     while True:
         try:
             job_data = job_queue.get()
             if job_data is None:
                 break
             job_id, file_path = job_data
-            run_pipeline_sync(job_id, file_path)
-        except Exception as e:
-            logger.error(f"Worker error: {e}")
+            _run_pipeline(job_id, file_path)
+        except Exception as exc:
+            logger.error(f"Worker error: {exc}")
         finally:
             job_queue.task_done()
 
-# Start the worker thread
-worker_thread = threading.Thread(target=worker, daemon=True)
-worker_thread.start()
+threading.Thread(target=_worker, daemon=True).start()
 
+
+# ── Models ─────────────────────────────────────────────────────────────────
 
 class AskRequest(BaseModel):
     question: str
 
+
+# ── Helpers ────────────────────────────────────────────────────────────────
 
 def _resolve_upload_path(job_id: str, filename: str | None) -> Path:
     suffix = Path(filename or "").suffix.lower()
     if suffix not in SUPPORTED_UPLOAD_SUFFIXES:
         raise ValueError(f"Unsupported upload type: {suffix or 'unknown'}")
     return UPLOAD_DIR / f"{job_id}{suffix}"
+
+
+# ── Upload ─────────────────────────────────────────────────────────────────
 
 @app.post("/upload")
 async def upload(file: UploadFile = File(...)):
@@ -66,58 +74,50 @@ async def upload(file: UploadFile = File(...)):
         "job_id": job_id, "result_path": None,
         "created_at": now, "started_at": None, "updated_at": now,
         "file_path": str(file_path),
+        "chat_history": [],   # server-side persistent chat history
     }
-    
-    # Add to sequential queue
     job_queue.put((job_id, str(file_path)))
-    
     return {"job_id": job_id, "filename": file.filename}
 
-def run_pipeline_sync(job_id: str, file_path: str):
-    heartbeat_stop = threading.Event()
 
+# ── Pipeline runner ────────────────────────────────────────────────────────
+
+def _run_pipeline(job_id: str, file_path: str):
+    heartbeat_stop = threading.Event()
     try:
         import sys; sys.path.insert(0, ".")
         from tender_extraction.main import TenderExtractionPipeline
-        
+
         job = jobs[job_id]
         started_at = time.time()
         job["started_at"] = started_at
         job["updated_at"] = started_at
         stage_state = {"message": "Starting pipeline...", "progress": 5}
 
-        def heartbeat_loop():
+        def _heartbeat():
             while not heartbeat_stop.wait(5):
                 if job.get("status") != "running":
                     continue
                 elapsed = int(time.time() - started_at)
-                base = stage_state["message"]
-                job["message"] = f"{base} ({elapsed}s)"
+                job["message"] = f"{stage_state['message']} ({elapsed}s)"
                 job["updated_at"] = time.time()
 
-        heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
-        heartbeat_thread.start()
+        threading.Thread(target=_heartbeat, daemon=True).start()
 
-        job["status"] = "running"
-        job["progress"] = 5
-        job["message"] = "Starting pipeline..."
-        job["updated_at"] = time.time()
-        
-        def progress_callback(progress: int, message: str):
-            stage_state["message"] = message
-            stage_state["progress"] = progress
-            job["progress"] = progress
-            job["message"] = message
-            job["status"] = "running"
-            job["updated_at"] = time.time()
-        
+        job.update({"status": "running", "progress": 5,
+                    "message": "Starting pipeline...", "updated_at": time.time()})
+
+        def _progress(pct: int, msg: str):
+            stage_state.update({"message": msg, "progress": pct})
+            job.update({"progress": pct, "message": msg,
+                        "status": "running", "updated_at": time.time()})
+
         output_path = str(OUTPUT_DIR / f"{job_id}.json")
         pipeline = TenderExtractionPipeline()
         result = pipeline.run(file_path, output_path=output_path,
-                              progress_callback=progress_callback)
-        
-        # Optional: Auto-score if profile exists
-        match_score = None
+                              progress_callback=_progress)
+
+        # Auto-score against company profile if present
         profile_path = Path("company_profile.json")
         if profile_path.exists():
             try:
@@ -125,36 +125,44 @@ def run_pipeline_sync(job_id: str, file_path: str):
                 from tender_extraction.scoring import score_tender_match
                 profile = json.loads(profile_path.read_text(encoding="utf-8"))
                 score_res = score_tender_match(profile, result)
-                match_score = score_res.get("match_score")
-                job["match_score"] = match_score
+                job["match_score"] = score_res.get("match_score")
                 job["match_data"] = score_res
-            except Exception as e:
-                logger.warning(f"Auto-scoring failed for {job_id}: {e}")
+            except Exception as exc:
+                logger.warning(f"Auto-scoring failed for {job_id}: {exc}")
 
         specs = len(result.get("technical_specifications", []))
         deliverables = len(result.get("scope_of_work", {}).get("deliverables", []))
-        
-        job["progress"] = 100
-        job["status"] = "done"
-        job["result_path"] = output_path
-        msg = f"Complete - {specs} specs, {deliverables} deliverables"
+        match_score = job.get("match_score")
+        msg = f"Complete — {specs} specs, {deliverables} deliverables"
         if match_score is not None:
             msg += f" (Match: {match_score}%)"
-        job["message"] = msg
-        job["updated_at"] = time.time()
-        
-    except Exception as e:
-        jobs[job_id]["status"] = "error"
-        jobs[job_id]["message"] = str(e)
-        jobs[job_id]["updated_at"] = time.time()
+
+        job.update({"progress": 100, "status": "done",
+                    "result_path": output_path, "message": msg,
+                    "updated_at": time.time()})
+
+    except Exception as exc:
+        jobs[job_id].update({"status": "error", "message": str(exc),
+                             "updated_at": time.time()})
     finally:
         heartbeat_stop.set()
+
+
+# ── Job endpoints ──────────────────────────────────────────────────────────
+
+@app.get("/jobs")
+def list_jobs():
+    # Omit chat_history from the list to keep the polling payload lean
+    return [
+        {k: v for k, v in job.items() if k != "chat_history"}
+        for job in jobs.values()
+    ]
 
 @app.get("/jobs/{job_id}/status")
 def get_status(job_id: str):
     if job_id not in jobs:
         return {"error": "not found"}
-    return jobs[job_id]
+    return {k: v for k, v in jobs[job_id].items() if k != "chat_history"}
 
 @app.get("/jobs/{job_id}/result")
 def get_result(job_id: str):
@@ -163,6 +171,19 @@ def get_result(job_id: str):
         return {"error": "not ready"}
     return json.loads(Path(job["result_path"]).read_text(encoding="utf-8"))
 
+@app.delete("/jobs/{job_id}")
+def delete_job(job_id: str):
+    session = chat_sessions.pop(job_id, None)
+    if session is not None:
+        try:
+            session.close()
+        except Exception:
+            pass
+    jobs.pop(job_id, None)
+    return {"deleted": job_id}
+
+
+# ── Chat / Q&A endpoints ───────────────────────────────────────────────────
 
 @app.post("/jobs/{job_id}/ask")
 def ask_document(job_id: str, payload: AskRequest):
@@ -178,38 +199,60 @@ def ask_document(job_id: str, payload: AskRequest):
     if not file_path or not Path(file_path).exists():
         return {"error": "source document is unavailable"}
 
+    # Lazy-initialise a per-job Qdrant session.
+    # Each job gets its own storage folder so simultaneous Q&A requests
+    # on different jobs never collide with each other.
     session = chat_sessions.get(job_id)
     if session is None:
         import sys; sys.path.insert(0, ".")
         from tender_extraction.qa import DocumentChatSession
 
+        qa_dir = str(OUTPUT_DIR / f"_qa_{job_id}")
         session = DocumentChatSession(
             file_path,
-            persist_dir=str(OUTPUT_DIR / "_qa_qdrant_storage"),
+            persist_dir=qa_dir,
             force_reindex=False,
         )
         chat_sessions[job_id] = session
 
     try:
-        return session.ask(question)
+        answer_data = session.ask(question)
+
+        # Persist exchange in the job dict so the client can reload history
+        # after a tab switch without needing to re-ask.
+        job["chat_history"].append({
+            "id": str(uuid.uuid4())[:8],
+            "ts": time.time(),
+            "question": question,
+            "answer": answer_data,
+        })
+        return answer_data
+
     except Exception as exc:
+        logger.error(f"ask_document error for {job_id}: {exc}")
         return {"error": str(exc)}
 
-@app.get("/jobs")
-def list_jobs():
-    return list(jobs.values())
 
-@app.delete("/jobs/{job_id}")
-def delete_job(job_id: str):
-    session = chat_sessions.pop(job_id, None)
-    if session is not None:
-        try:
-            session.close()
-        except Exception:
-            pass
-    if job_id in jobs:
-        del jobs[job_id]
-    return {"deleted": job_id}
+@app.get("/jobs/{job_id}/history")
+def get_chat_history(job_id: str):
+    """Return the full server-side chat history so the client can restore it."""
+    job = jobs.get(job_id)
+    if not job:
+        return {"error": "not found"}
+    return {"history": job.get("chat_history", [])}
+
+
+@app.delete("/jobs/{job_id}/history")
+def clear_chat_history(job_id: str):
+    """Wipe the chat history for a job."""
+    job = jobs.get(job_id)
+    if not job:
+        return {"error": "not found"}
+    job["chat_history"] = []
+    return {"cleared": True}
+
+
+# ── Profile & Score endpoints ──────────────────────────────────────────────
 
 @app.get("/profile")
 def get_profile():
@@ -229,16 +272,13 @@ def get_job_score(job_id: str):
     job = jobs.get(job_id)
     if not job or job["status"] != "done":
         return {"error": "not ready"}
-    
+
     result = json.loads(Path(job["result_path"]).read_text(encoding="utf-8"))
     profile_path = Path("company_profile.json")
     if not profile_path.exists():
         return {"error": "company profile not set"}
-    
+
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
-    
     import sys; sys.path.insert(0, ".")
     from tender_extraction.scoring import score_tender_match
-    
-    score_result = score_tender_match(profile, result)
-    return score_result
+    return score_tender_match(profile, result)

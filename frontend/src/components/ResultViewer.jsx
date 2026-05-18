@@ -82,6 +82,8 @@ export default function ResultViewer({ job, onBack }) {
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState('specs');
   const [error, setError] = useState(null);
+  // Chat history is lifted here so it survives switching between tabs
+  const [chatMessages, setChatMessages] = useState([]);
   const jobId = job?.job_id || null;
   const jobStatus = job?.status || null;
 
@@ -222,7 +224,13 @@ export default function ResultViewer({ job, onBack }) {
       <div style={{ flex: 1, overflow: 'hidden', background: 'var(--canvas)' }}>
         {activeTab === 'specs' && <SpecsTable specs={specs} />}
         {activeTab === 'scope' && <ScopePanel scope={scope} />}
-        {activeTab === 'qa' && <ChatPanel job={job} />}
+        {activeTab === 'qa' && (
+          <ChatPanel
+            job={job}
+            messages={chatMessages}
+            setMessages={setChatMessages}
+          />
+        )}
         {activeTab === 'match' && <ScorePanel jobId={job.job_id} initialData={job.match_data} />}
       </div>
     </div>

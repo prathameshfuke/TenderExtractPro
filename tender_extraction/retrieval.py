@@ -86,15 +86,23 @@ class HybridRetriever:
         self._child_chunks: List[Dict[str, Any]] = []
         self._bm25: Optional[BM25Okapi] = None
 
-        persist_path = str(persist_dir or config.retrieval.qdrant_path)
-        self._persist_path = Path(persist_path)
-        self._persist_path.mkdir(parents=True, exist_ok=True)
-        self._manifest_path = self._persist_path / "_hybrid_manifest.json"
+        raw_dir = str(persist_dir or config.retrieval.qdrant_path)
+        self._in_memory = (raw_dir == ":memory:")
 
-        self._qdrant = QdrantClient(path=persist_path)
+        if self._in_memory:
+            # No file-locking, no disk I/O — ideal for ephemeral QA sessions.
+            self._qdrant = QdrantClient(location=":memory:")
+            self._persist_path = None
+            self._manifest_path = None
+            logger.info("Qdrant in-memory client initialised (QA session mode).")
+        else:
+            self._persist_path = Path(raw_dir)
+            self._persist_path.mkdir(parents=True, exist_ok=True)
+            self._manifest_path = self._persist_path / "_hybrid_manifest.json"
+            self._qdrant = QdrantClient(path=raw_dir)
+            logger.info("Qdrant local client initialised at: %s", raw_dir)
+
         self._collection_name: Optional[str] = None
-
-        logger.info("Qdrant local client initialised at: %s", persist_path)
 
     def close(self) -> None:
         try:
@@ -227,17 +235,31 @@ class HybridRetriever:
 
         hit_id_to_emb_score = {int(h.id): float(h.score) for h in qdrant_hits}
 
-        # Fuse
+        # Fuse with RRF (Reciprocal Rank Fusion)
+        RRF_K = 60
+        bm25_ranked_indices = np.argsort(bm25_raw)[::-1]
+        bm25_ranks = {int(idx): r + 1 for r, idx in enumerate(bm25_ranked_indices)}
+        
+        qdrant_ranked_indices = [int(h.id) for h in qdrant_hits]
+        qdrant_ranks = {idx: r + 1 for r, idx in enumerate(qdrant_ranked_indices)}
+
         rerank_k = min(top_k * 5, len(self._child_chunks))
-        top_bm25_ids = set(np.argsort(bm25_raw)[::-1][:rerank_k].tolist())
-        top_qdrant_ids = set(hit_id_to_emb_score.keys())
+        top_bm25_ids = set(bm25_ranked_indices[:rerank_k].tolist())
+        top_qdrant_ids = set(qdrant_ranked_indices)
         candidate_ids = list(top_bm25_ids | top_qdrant_ids)
 
         w_bm25, w_emb = config.retrieval.bm25_weight, config.retrieval.embedding_weight
         child_scored = []
         for idx in candidate_ids:
             if idx >= len(self._child_chunks): continue
-            score = w_bm25 * float(bm25_norm[idx]) + w_emb * hit_id_to_emb_score.get(idx, 0.0)
+            
+            bm25_rank = bm25_ranks.get(idx)
+            bm25_rrf = 1.0 / (RRF_K + bm25_rank) if bm25_rank is not None else 0.0
+            
+            qdrant_rank = qdrant_ranks.get(idx)
+            qdrant_rrf = 1.0 / (RRF_K + qdrant_rank) if qdrant_rank is not None else 0.0
+            
+            score = w_bm25 * bm25_rrf + w_emb * qdrant_rrf
             child_scored.append((idx, score))
 
         child_scored.sort(key=lambda x: x[1], reverse=True)
@@ -339,6 +361,8 @@ class HybridRetriever:
         return candidates[:top_k]
 
     def _load_manifest(self) -> Dict[str, Dict[str, Any]]:
+        if self._in_memory or self._manifest_path is None:
+            return {}
         if not self._manifest_path.exists():
             return {}
         try:
@@ -347,6 +371,8 @@ class HybridRetriever:
             return {}
 
     def _write_manifest(self, manifest: Dict[str, Dict[str, Any]]) -> None:
+        if self._in_memory or self._manifest_path is None:
+            return   # no disk persistence in memory mode
         self._manifest_path.write_text(
             json.dumps(manifest, indent=2, ensure_ascii=False),
             encoding="utf-8",
@@ -373,11 +399,59 @@ def _min_max_normalize(arr: np.ndarray) -> np.ndarray:
 
 
 def expand_query(query: str) -> str:
-    # (Simple synonym expansion from original)
-    _SYNONYMS = {"specification": ["specs", "standard"], "material": ["grade", "alloy"], "dimension": ["size", "diameter"]}
+    """
+    Expand a query with domain-specific synonyms for government tender documents.
+
+    Covers the primary terminology families found in Indian and international
+    public-sector procurement: specifications, scope, commercial/legal terms,
+    and common abbreviations used by CPWD, NHAI, MoRTH, PWD, etc.
+    """
+    _SYNONYMS: Dict[str, List[str]] = {
+        # Technical specs
+        "specification":    ["specs", "standard", "requirement", "parameter", "technical requirement"],
+        "material":         ["grade", "alloy", "composition", "substance", "item"],
+        "dimension":        ["size", "diameter", "length", "width", "thickness", "height"],
+        "tolerance":        ["allowance", "deviation", "variation", "accuracy"],
+        "capacity":         ["rating", "output", "throughput", "flow rate", "load"],
+        "performance":      ["efficiency", "output", "yield", "productivity", "benchmark"],
+        "standard":         ["IS", "BIS", "ASTM", "ISO", "IEC", "BS", "DIN", "code", "norm"],
+        "test":             ["testing", "inspection", "quality check", "QC", "trial", "evaluation"],
+        "installation":     ["erection", "commissioning", "setting up", "mounting", "fixing"],
+
+        # Scope of work
+        "scope":            ["scope of work", "work description", "SOW", "activities", "task", "job"],
+        "deliverable":      ["output", "supply", "product", "milestone", "submission"],
+        "timeline":         ["schedule", "completion date", "milestone", "period", "deadline", "duration"],
+        "exclusion":        ["excluded", "not in scope", "outside scope", "not included", "exceptions"],
+        "location":         ["site", "project site", "place", "premises", "area", "zone"],
+        "obligation":       ["responsibility", "duty", "commitment", "liable", "shall", "must"],
+
+        # Commercial / legal
+        "tender":           ["bid", "NIT", "proposal", "RFP", "RFQ", "enquiry", "notice", "invitation"],
+        "contract":         ["agreement", "work order", "purchase order", "PO", "LOI", "LOA"],
+        "guarantee":        ["EMD", "earnest money", "security deposit", "bank guarantee", "performance guarantee", "PBG"],
+        "penalty":          ["liquidated damages", "LD", "delay penalty", "deduction", "forfeiture"],
+        "price":            ["rate", "cost", "amount", "quote", "BOQ", "bill of quantities", "tariff"],
+        "payment":          ["billing", "invoice", "milestone payment", "advance", "retention", "mobilisation"],
+        "eligibility":      ["qualification", "criteria", "pre-qualification", "PQ", "turnover", "net worth", "financial capacity"],
+        "experience":       ["past work", "track record", "similar work", "credentials", "portfolio", "completed project"],
+        "validity":         ["bid validity", "offer validity", "period", "duration"],
+        "submission":       ["submission date", "last date", "due date", "closing date"],
+
+        # Common abbreviations
+        "quantity":         ["qty", "nos", "numbers", "units", "count"],
+        "drawing":          ["DWG", "layout", "plan", "blueprint", "sketch"],
+    }
+
     query_lower = query.lower()
-    expansions = []
+    expansions: List[str] = []
     for term, syns in _SYNONYMS.items():
         if term in query_lower:
-            expansions.extend([s for s in syns if s.lower() not in query_lower][:2])
+            for s in syns:
+                if s.lower() not in query_lower and s not in expansions:
+                    expansions.append(s)
+                    if len(expansions) >= 4:   # cap additions per query to avoid context bloat
+                        break
+        if len(expansions) >= 6:
+            break
     return (query + " " + " ".join(expansions)).strip() if expansions else query

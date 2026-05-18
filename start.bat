@@ -2,11 +2,11 @@
 echo Starting TenderExtractPro...
 echo.
 echo [1/2] Starting FastAPI backend on port 8000...
-start "TenderExtractPro API" cmd /k "cd /d D:\TenderExtractPro && venv312\Scripts\activate && venv312\Scripts\uvicorn.exe api.main:app --reload --port 8000 --log-level info"
+start "TenderExtractPro API" cmd /k "cd /d D:\Project\TenderExtractPro && venv312\Scripts\activate && python -m uvicorn api.main:app --reload --port 8000 --log-level info"
 timeout /t 4 /nobreak > nul
 
 echo [2/2] Starting React frontend on port 5173...
-start "TenderExtractPro UI" cmd /k "cd /d D:\TenderExtractPro\frontend && npm run dev"
+start "TenderExtractPro UI" cmd /k "cd /d D:\Project\TenderExtractPro\frontend && npm run dev"
 timeout /t 2 /nobreak > nul
 
 echo.

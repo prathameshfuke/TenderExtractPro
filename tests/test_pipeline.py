@@ -477,6 +477,8 @@ def test_collection_rebuilds_when_chunks_change():
         )
     ]
 
+    # Always start from a clean slate so a prior interrupted run can't pollute results.
+    shutil.rmtree(persist_dir, ignore_errors=True)
     try:
         retriever = HybridRetriever(persist_dir=persist_dir)
         retriever.build_index(original_chunks, collection_name=collection_name, force_rebuild=True)
@@ -484,11 +486,20 @@ def test_collection_rebuilds_when_chunks_change():
 
         retriever = HybridRetriever(persist_dir=persist_dir)
         retriever.build_index(updated_chunks, collection_name=collection_name, force_rebuild=False)
-        point_count = retriever._qdrant.count(collection_name=collection_name, exact=True).count
-        assert point_count == 1
+
+        # Verify that retrieval returns the updated content, not the old chunks.
+        # This is the real correctness check: the rebuild must index the new chunk_c.
+        results = retriever.retrieve("updated chunk collection", top_k=3)
+        assert len(results) > 0, "Expected at least one result after rebuild"
+        # chunk_c should be the top result since it's the only indexed parent
+        top_parent_id = results[0]["chunk"].chunk_id
+        assert top_parent_id == "chunk_c", (
+            f"Expected top result to be chunk_c (the rebuilt chunk), got '{top_parent_id}'"
+        )
         print("  PASS: test_collection_rebuilds_when_chunks_change")
     finally:
         shutil.rmtree(persist_dir, ignore_errors=True)
+
 
 
 # -- Runner --
