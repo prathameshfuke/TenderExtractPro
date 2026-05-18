@@ -110,10 +110,16 @@ _QA_SYSTEM = (
 )
 
 _QA_INSTRUCTIONS = (
-    'Return JSON with keys "answer", "citations", and "confidence".\n'
-    '- "answer": short grounded answer in plain English.\n'
+    'Return ONLY valid JSON with keys "answer", "citations", and "confidence".\n'
+    '- "answer": clear, grounded answer in plain English. If asked about requirements, specifications, or scope, list SPECIFIC parameters and numbers, do not use generic summaries. Use bullet points if there are multiple items.\n'
     '- "citations": array of objects with "page", "chunk_id", and "quote". Use up to 3 citations.\n'
-    '- "confidence": one of HIGH, MEDIUM, LOW.\n\n'
+    '- "confidence": one of "HIGH", "MEDIUM", "LOW" (MUST BE IN QUOTES).\n\n'
+    'EXAMPLE OUTPUT:\n'
+    '{\n'
+    '  "answer": "The main technical requirements are:\\n- Voltage: 220V\\n- Power: 500kW\\n- Material: Stainless Steel 304",\n'
+    '  "citations": [{"page": 4, "chunk_id": "chunk_0", "quote": "System must operate at 220V, 500kW and be constructed of Stainless Steel 304."}],\n'
+    '  "confidence": "HIGH"\n'
+    '}\n\n'
     'If the answer is not present, set "answer" to "NOT_FOUND in provided document context" and use an empty citations array.\n\n'
     'QUESTION:\n{question}\n\n'
     'DOCUMENT TOPIC:\n{topic}\n\n'
@@ -377,10 +383,38 @@ def answer_question(retrieved_chunks: List[Dict[str, Any]], question: str, topic
     prompt = build_qa_prompt(question, context, topic)
     raw = _call_llm(llm, prompt, "Answering")
     try:
-        parsed = json.loads(_repair_json(raw))
+        # Pre-fix common unquoted confidence issues before parsing
+        import re
+        fixed_raw = re.sub(r'"confidence"\s*:\s*(HIGH|MEDIUM|LOW)\b', r'"confidence": "\1"', raw, flags=re.IGNORECASE)
+        # Attempt to append missing braces if truncated
+        if fixed_raw.count('{') > fixed_raw.count('}'):
+            fixed_raw += '}'
+            
+        parsed = json.loads(_repair_json(fixed_raw))
         return parsed
-    except:
-        return {"answer": raw, "citations": [], "confidence": "LOW"}
+    except Exception as e:
+        logger.warning("QA JSON parse failed: %s. Raw: %s", e, raw)
+        # Fallback: heavily robust regex extraction for all fields
+        import re
+        
+        # 1. Answer text
+        ans_match = re.search(r'"answer"\s*:\s*"((?:\\.|[^"\\])*)"', raw)
+        answer_text = ans_match.group(1).replace('\\"', '"').replace('\\n', '\n') if ans_match else raw
+        
+        # 2. Citations
+        citations = []
+        for cit_match in re.finditer(r'\{\s*"page"\s*:\s*(\d+).*?"quote"\s*:\s*"((?:\\.|[^"\\])*)"', raw, flags=re.DOTALL):
+            page = int(cit_match.group(1))
+            quote = cit_match.group(2).replace('\\"', '"').replace('\\n', '\n')
+            citations.append({"page": page, "chunk_id": None, "quote": quote})
+            
+        # 3. Confidence
+        conf_match = re.search(r'"confidence"\s*:\s*"?([A-Za-z]+)"?', raw)
+        confidence = "LOW"
+        if conf_match and conf_match.group(1).upper() in ("HIGH", "MEDIUM", "LOW"):
+            confidence = conf_match.group(1).upper()
+            
+        return {"answer": answer_text, "citations": citations, "confidence": confidence}
 
 def _build_context(retrieved_chunks: List[Dict[str, Any]]) -> str:
     if not retrieved_chunks: return ""

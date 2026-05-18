@@ -316,8 +316,18 @@ class HybridRetriever:
 
     def retrieve_question_chunks(self, query: str, top_k: int = 10) -> List[Dict[str, Any]]:
         """Specific retrieval for QA queries."""
-        # We could add specific logic here, like emphasizing paragraph chunks
-        return self.retrieve(query, top_k=top_k)
+        results = self.retrieve(query, top_k=top_k * 2)
+        has_digits = re.compile(r'\d')
+        for r in results:
+            ch = r["chunk"]
+            # Boost chunks with numbers (dates, parameters, prices)
+            if has_digits.search(ch.text):
+                r["score"] *= 1.15
+            # Strongly boost structured data (tables, lists) where details usually live
+            if ch.metadata.chunk_type in {"table_row", "list"}:
+                r["score"] *= 1.25
+        results.sort(key=lambda x: x["score"], reverse=True)
+        return results[:top_k]
 
     def delete_collection(self, collection_name: Optional[str] = None) -> None:
         name = collection_name or self._collection_name
