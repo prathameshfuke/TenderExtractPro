@@ -221,17 +221,24 @@ export default function ResultViewer({ job, onBack }) {
         </div>
       </div>
 
-      <div style={{ flex: 1, overflow: 'hidden', background: 'var(--canvas)' }}>
-        {activeTab === 'specs' && <SpecsTable specs={specs} />}
-        {activeTab === 'scope' && <ScopePanel scope={scope} />}
-        {activeTab === 'qa' && (
+      <div style={{ flex: 1, overflow: 'hidden', background: 'var(--canvas)', position: 'relative' }}>
+        {/* Always keep panels mounted — CSS visibility prevents unmounting during in-flight requests */}
+        <div style={{ display: activeTab === 'specs' ? 'block' : 'none', height: '100%', overflow: 'auto' }}>
+          <SpecsTable specs={specs} />
+        </div>
+        <div style={{ display: activeTab === 'scope' ? 'block' : 'none', height: '100%', overflow: 'auto' }}>
+          <ScopePanel scope={scope} />
+        </div>
+        <div style={{ display: activeTab === 'qa' ? 'flex' : 'none', flexDirection: 'column', height: '100%' }}>
           <ChatPanel
             job={job}
             messages={chatMessages}
             setMessages={setChatMessages}
           />
-        )}
-        {activeTab === 'match' && <ScorePanel jobId={job.job_id} initialData={job.match_data} />}
+        </div>
+        <div style={{ display: activeTab === 'match' ? 'block' : 'none', height: '100%', overflow: 'auto' }}>
+          <ScorePanel jobId={job.job_id} initialData={job.match_data} />
+        </div>
       </div>
     </div>
   );

@@ -199,26 +199,31 @@ def ask_document(job_id: str, payload: AskRequest):
     if not file_path or not Path(file_path).exists():
         return {"error": "source document is unavailable"}
 
-    # Lazy-initialise a per-job Qdrant session.
-    # Each job gets its own storage folder so simultaneous Q&A requests
-    # on different jobs never collide with each other.
-    session = chat_sessions.get(job_id)
-    if session is None:
-        import sys; sys.path.insert(0, ".")
-        from tender_extraction.qa import DocumentChatSession
+    # Ensure we have a per-job lock before touching chat_sessions
+    if job_id not in chat_session_locks:
+        chat_session_locks[job_id] = threading.Lock()
+    lock = chat_session_locks[job_id]
 
-        qa_dir = str(OUTPUT_DIR / f"_qa_{job_id}")
-        session = DocumentChatSession(
-            file_path,
-            persist_dir=qa_dir,
-            force_reindex=False,
-        )
-        chat_sessions[job_id] = session
+    with lock:
+        session = chat_sessions.get(job_id)
+        if session is None:
+            import sys; sys.path.insert(0, ".")
+            from tender_extraction.qa import DocumentChatSession
+
+            # ":memory:" avoids ALL file-locking issues — the QA index only
+            # needs to live as long as the server process, so disk persistence
+            # gives us nothing but problems (concurrent access errors on reload).
+            session = DocumentChatSession(
+                file_path,
+                persist_dir=":memory:",
+                force_reindex=True,   # always fresh — no stale cache to worry about
+            )
+            chat_sessions[job_id] = session
 
     try:
         answer_data = session.ask(question)
 
-        # Persist exchange in the job dict so the client can reload history
+        # Persist the exchange server-side so the frontend can restore it
         # after a tab switch without needing to re-ask.
         job["chat_history"].append({
             "id": str(uuid.uuid4())[:8],
