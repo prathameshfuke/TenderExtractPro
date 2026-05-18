@@ -155,12 +155,14 @@ export default function ChatPanel({ job, messages, setMessages }) {
     }
   }, [messages, loading]);
 
-  // Load server-side history once when the panel first mounts for this job
+  // Load server-side chat history once when the panel first receives a job.
+  // Since ChatPanel is always mounted (display:none trick in ResultViewer),
+  // this effect runs exactly once per job lifecycle.
   useEffect(() => {
-    if (!job?.job_id || historyLoaded || messages.length > 0) {
-      setHistoryLoaded(true);
-      return;
-    }
+    if (!job?.job_id || historyLoaded) return;
+    setHistoryLoaded(true); // mark immediately to prevent double-fetch
+    if (messages.length > 0) return; // already populated from an earlier restore
+
     api.get(`/jobs/${job.job_id}/history`)
       .then(res => {
         const history = res.data?.history || [];
@@ -178,8 +180,7 @@ export default function ChatPanel({ job, messages, setMessages }) {
           setMessages(restored);
         }
       })
-      .catch(() => {}) // silently ignore history fetch errors
-      .finally(() => setHistoryLoaded(true));
+      .catch(() => {}); // silently ignore — history is best-effort
   }, [job?.job_id]);
 
   const askQuestion = useCallback(async (rawQuestion) => {
